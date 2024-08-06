@@ -38,4 +38,8 @@ public:
   virtual void init(Param *param = nullptr) = 0;
 
   virtual long long memory_consumption() = 0; // bytes
+
+  virtual std::vector<KEY_TYPE> get_all_keys() = 0;
+
+  virtual ~indexInterface() = default;
 };
