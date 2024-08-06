@@ -509,6 +509,14 @@ public:
         if (clear_flag) stat.clear();
     }
 
+    void get_all_keys(index_t *index){
+        if (index == nullptr){
+            COUT_THIS("Index not initialised");
+        }
+        std::vector<KEY_TYPE> remaining_keys = index -> get_all_keys();
+        COUT_THIS("Reamaining key size " << remaining_keys.size());
+    }
+
     void run_benchmark() {
         load_keys();
         generate_operations(keys);
@@ -519,7 +527,8 @@ public:
                 index_t *index;
                 prepare(index, keys);
                 run(index);
-                if (index != nullptr) delete index;
+                get_all_keys(index);
+                //if (index != nullptr) delete index;
             }
         }
     }
