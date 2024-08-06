@@ -23,6 +23,8 @@ public:
 
     long long memory_consumption() { return index.model_size() + index.data_size(); }
 
+    std::vector<KEY_TYPE> get_all_keys();
+
 private:
     alexol::Alex <KEY_TYPE, PAYLOAD_TYPE, alexol::AlexCompare, std::allocator<
             std::pair < KEY_TYPE, PAYLOAD_TYPE>>, false>
@@ -69,4 +71,13 @@ size_t alexolInterface<KEY_TYPE, PAYLOAD_TYPE>::scan(KEY_TYPE key_low_bound, siz
                                                      Param *param) {
     auto scan_size = index.range_scan_by_size(key_low_bound, static_cast<uint32_t>(key_num), result);
     return scan_size;
+}
+
+template<class KEY_TYPE, class PAYLOAD_TYPE>
+std::vector<KEY_TYPE> alexolInterface<KEY_TYPE, PAYLOAD_TYPE>::get_all_keys() {
+  std::vector<KEY_TYPE> keys;
+  for (auto it = index.begin(); it != index.end(); ++it) {
+    keys.push_back(it.key());
+  }
+  return keys;
 }
