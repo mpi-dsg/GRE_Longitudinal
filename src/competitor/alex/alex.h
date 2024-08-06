@@ -21,6 +21,8 @@ public:
 
   long long memory_consumption() { return index.model_size() + index.data_size(); }
 
+  std::vector<KEY_TYPE> get_all_keys();
+
 private:
   alex::Alex<KEY_TYPE, PAYLOAD_TYPE, alex::AlexCompare, std::allocator < std::pair < KEY_TYPE, PAYLOAD_TYPE>>, false>
   index;
@@ -70,4 +72,13 @@ size_t alexInterface<KEY_TYPE, PAYLOAD_TYPE>::scan(KEY_TYPE key_low_bound, size_
     iter++;
   }
   return scan_size;
+}
+
+template<class KEY_TYPE, class PAYLOAD_TYPE>
+std::vector<KEY_TYPE> alexInterface<KEY_TYPE, PAYLOAD_TYPE>::get_all_keys() {
+  std::vector<KEY_TYPE> keys;
+  for (auto it = index.begin(); it != index.end(); ++it) {
+    keys.push_back(it.key());
+  }
+  return keys;
 }
