@@ -41,6 +41,9 @@ public:
 
   long long memory_consumption() { return 0; }
 
+  std::vector<KEY_TYPE> get_all_keys();
+
+
 private:
   stx::btree<KEY_TYPE, PAYLOAD_TYPE> idx;
 };
@@ -79,3 +82,11 @@ bool BTreeInterface<KEY_TYPE, PAYLOAD_TYPE>::remove(KEY_TYPE key, Param *param) 
   return num_erase > 0;
 }
 
+template<class KEY_TYPE, class PAYLOAD_TYPE>
+std::vector<KEY_TYPE> BTreeInterface<KEY_TYPE, PAYLOAD_TYPE>::get_all_keys() {
+  std::vector<KEY_TYPE> keys;
+  for (auto it = idx.begin(); it != idx.end(); ++it) {
+    keys.push_back(it.key());
+  }
+  return keys;
+}
