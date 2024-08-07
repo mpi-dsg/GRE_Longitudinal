@@ -23,6 +23,18 @@ public:
 
   long long memory_consumption() { return 0; }
 
+  std::vector<KEY_TYPE> get_all_keys() {
+    std::vector<KEY_TYPE> keys;
+    size_t key_num = 200000000;
+    std::pair<KEY_TYPE, PAYLOAD_TYPE> *result = new std::pair<KEY_TYPE, PAYLOAD_TYPE>[key_num];
+    size_t num_keys = scan(std::numeric_limits<KEY_TYPE>::min(), key_num, result, nullptr);
+    for (size_t i = 0; i < num_keys; ++i) {
+        keys.push_back(result[i].first);
+    }
+    delete[] result;
+    return keys;
+  }
+
 private:
   btreeolc::BTree<KEY_TYPE, PAYLOAD_TYPE> idx;
 };
