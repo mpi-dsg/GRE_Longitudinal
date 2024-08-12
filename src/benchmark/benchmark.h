@@ -250,8 +250,9 @@ public:
         // generate operations(read, insert, update, scan)
         COUT_THIS("generate operations.");
         std::uniform_real_distribution<> ratio_dis(0, 1);
-        size_t sample_counter = 0, insert_counter = init_table_size;
+        size_t insert_counter = init_table_size;
         size_t delete_counter = table_size * (1 - del_table_ratio);
+        std::uniform_int_distribution<size_t> sample_counter_dis(0, insert_counter - 1);
 
         if (data_shift) {
             size_t rest_key_num = table_size - init_table_size;
@@ -270,23 +271,26 @@ public:
                 //     break;
                 // }
                 // operations.push_back(std::pair<Operation, KEY_TYPE>(READ, keys[temp_counter++]));
-                operations.push_back(std::pair<Operation, KEY_TYPE>(READ, sample_ptr[sample_counter++]));
+                size_t sample_counter = sample_counter_dis(gen);
+                operations.push_back(std::pair<Operation, KEY_TYPE>(READ, sample_ptr[sample_counter]));
             } else if (prob < read_ratio + insert_ratio) {
                 if (insert_counter >= table_size) {
                     operations_num = i;
                     break;
                 }
-                operations.push_back(std::pair<Operation, KEY_TYPE>(INSERT, keys[insert_counter++]));
+                operations.push_back(std::pair<Operation, KEY_TYPE>(INSERT, keys[insert_counter]));
             } else if (prob < read_ratio + insert_ratio + update_ratio) {
-                operations.push_back(std::pair<Operation, KEY_TYPE>(UPDATE, sample_ptr[sample_counter++]));
+                size_t sample_counter = sample_counter_dis(gen);
+                operations.push_back(std::pair<Operation, KEY_TYPE>(UPDATE, sample_ptr[sample_counter]));
             } else if (prob < read_ratio + insert_ratio + update_ratio + scan_ratio) {
-                operations.push_back(std::pair<Operation, KEY_TYPE>(SCAN, sample_ptr[sample_counter++]));
+                size_t sample_counter = sample_counter_dis(gen);
+                operations.push_back(std::pair<Operation, KEY_TYPE>(SCAN, sample_ptr[sample_counter]));
             } else {
                 if (delete_counter >= table_size) {
                     operations_num = i;
                     break;
                 }
-                operations.push_back(std::pair<Operation, KEY_TYPE>(DELETE, keys[delete_counter++]));
+                operations.push_back(std::pair<Operation, KEY_TYPE>(DELETE, keys[delete_counter]));
                 // operations.push_back(std::pair<Operation, KEY_TYPE>(DELETE, sample_ptr[sample_counter++]));
             }
         }
@@ -511,6 +515,7 @@ public:
 
     void run_benchmark() {
         load_keys();
+        int n_runs = table_size / operations_num;
         generate_operations(keys, operations);
         for (auto s: all_index_type) {
             for (auto t: all_thread_num) {
@@ -519,12 +524,13 @@ public:
                 index_t *index;
                 prepare(index, keys);
                 run(index, operations);
-                std::vector <std::pair<Operation, KEY_TYPE>> operations2;
-                generate_operations(keys, opeations2);
-                run(index, operations2);
+		        for (int n = 0; n < n_runs * 1.5; ++n) {
+                    std::vector <std::pair<Operation, KEY_TYPE>> operations2;
+			        generate_operations(keys, operations2);
+			        run(index, operations2);
+		        }
                 if (index != nullptr) delete index;
             }
         }
     }
-
 };
