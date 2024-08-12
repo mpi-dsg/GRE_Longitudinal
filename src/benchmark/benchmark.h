@@ -236,7 +236,7 @@ public:
     }
 
 
-    void generate_operations(KEY_TYPE *keys) {
+    void generate_operations(KEY_TYPE *keys, std::vector <std::pair<Operation, KEY_TYPE>>& operations) {
         // prepare operations
         operations.reserve(operations_num);
         COUT_THIS("sample keys.");
@@ -290,13 +290,13 @@ public:
                 // operations.push_back(std::pair<Operation, KEY_TYPE>(DELETE, sample_ptr[sample_counter++]));
             }
         }
-
+        init_table_size = insert_counter;
         COUT_VAR(operations.size());
 
         delete[] sample_ptr;
     }
 
-    void run(index_t *index) {
+    void run(index_t *index, std::vector <std::pair<Operation, KEY_TYPE>>& operations) {
         std::thread *thread_array = new std::thread[thread_num];
         param_t params[thread_num];
         TSCNS tn;
@@ -511,14 +511,17 @@ public:
 
     void run_benchmark() {
         load_keys();
-        generate_operations(keys);
+        generate_operations(keys, operations);
         for (auto s: all_index_type) {
             for (auto t: all_thread_num) {
                 thread_num = stoi(t);
                 index_type = s;
                 index_t *index;
                 prepare(index, keys);
-                run(index);
+                run(index, operations);
+                std::vector <std::pair<Operation, KEY_TYPE>> operations2;
+                generate_operations(keys, opeations2);
+                run(index, operations2);
                 if (index != nullptr) delete index;
             }
         }
