@@ -242,9 +242,9 @@ public:
         COUT_THIS("sample keys.");
         KEY_TYPE *sample_ptr = nullptr;
         if (sample_distribution == "uniform") {
-            sample_ptr = get_search_keys(&init_keys[0], init_table_size, operations_num, &random_seed);
+            sample_ptr = get_search_keys(&keys[0], init_table_size, operations_num, &random_seed);
         } else if (sample_distribution == "zipf") {
-            sample_ptr = get_search_keys_zipf(&init_keys[0], init_table_size, operations_num, &random_seed);
+            sample_ptr = get_search_keys_zipf(&keys[0], init_table_size, operations_num, &random_seed);
         }
 
         // generate operations(read, insert, update, scan)
