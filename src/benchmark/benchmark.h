@@ -515,7 +515,7 @@ public:
 
     void run_benchmark() {
         load_keys();
-        int n_runs = table_size / operations_num;
+        int n_runs = table_size / (operations_num * 2);
         generate_operations(keys, operations);
         for (auto s: all_index_type) {
             for (auto t: all_thread_num) {
@@ -524,7 +524,7 @@ public:
                 index_t *index;
                 prepare(index, keys);
                 run(index, operations);
-		        for (int n = 0; n < n_runs * 1.5; ++n) {
+		        for (int n = 0; n < n_runs; ++n) {
                     std::vector <std::pair<Operation, KEY_TYPE>> operations2;
 			        generate_operations(keys, operations2);
 			        run(index, operations2);
