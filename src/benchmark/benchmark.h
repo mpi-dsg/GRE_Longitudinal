@@ -13,6 +13,7 @@
 #include <fstream>
 #include <thread>
 #include <ctime>
+#include <unordered_set>
 
 #include "../tscns.h"
 #include "omp.h"
@@ -60,10 +61,11 @@ class Benchmark {
     bool dataset_statistic;
     bool data_shift = false;
 
+    std::unordered_set<KEY_TYPE> inserted_keys;
     std::vector <KEY_TYPE> init_keys;
     KEY_TYPE *keys;
     std::pair <KEY_TYPE, PAYLOAD_TYPE> *init_key_values;
-    std::vector <std::pair<Operation, KEY_TYPE>> operations;
+    //std::vector <std::pair<Operation, KEY_TYPE>> operations;
     std::mt19937 gen;
 
     struct Stat {
@@ -158,6 +160,9 @@ public:
             init_key_values[i].first = init_keys[i];
             init_key_values[i].second = 123456789;
         }
+	inserted_keys.clear();
+	inserted_keys.insert(init_keys.begin(), init_keys.end());
+	    
         COUT_VAR(table_size);
         COUT_VAR(init_keys.size());
 
@@ -271,8 +276,11 @@ public:
                 //     break;
                 // }
                 // operations.push_back(std::pair<Operation, KEY_TYPE>(READ, keys[temp_counter++]));
+		    
                 size_t sample_counter = sample_counter_dis(gen);
-                operations.push_back(std::pair<Operation, KEY_TYPE>(READ, sample_ptr[sample_counter]));
+		if (inserted_keys.find(sample_ptr[sample_counter]) != inserted_keys.end()) {
+                	operations.push_back(std::pair<Operation, KEY_TYPE>(READ, sample_ptr[sample_counter]));
+		}
             } else if (prob < read_ratio + insert_ratio) {
                 if (insert_counter >= table_size) {
                     operations_num = i;
@@ -281,16 +289,21 @@ public:
                 operations.push_back(std::pair<Operation, KEY_TYPE>(INSERT, keys[insert_counter]));
             } else if (prob < read_ratio + insert_ratio + update_ratio) {
                 size_t sample_counter = sample_counter_dis(gen);
-                operations.push_back(std::pair<Operation, KEY_TYPE>(UPDATE, sample_ptr[sample_counter]));
+		if (inserted_keys.find(sample_ptr[sample_counter]) != inserted_keys.end()) {
+                	operations.push_back(std::pair<Operation, KEY_TYPE>(UPDATE, sample_ptr[sample_counter]));
+		}
             } else if (prob < read_ratio + insert_ratio + update_ratio + scan_ratio) {
                 size_t sample_counter = sample_counter_dis(gen);
-                operations.push_back(std::pair<Operation, KEY_TYPE>(SCAN, sample_ptr[sample_counter]));
+		if (inserted_keys.find(sample_ptr[sample_counter]) != inserted_keys.end()) {
+                	operations.push_back(std::pair<Operation, KEY_TYPE>(SCAN, sample_ptr[sample_counter]));
+		}
             } else {
                 if (delete_counter >= table_size) {
                     operations_num = i;
                     break;
                 }
                 operations.push_back(std::pair<Operation, KEY_TYPE>(DELETE, keys[delete_counter]));
+		inserted_keys.erase(keys[delete_counter]); // Remove key from set
                 // operations.push_back(std::pair<Operation, KEY_TYPE>(DELETE, sample_ptr[sample_counter++]));
             }
         }
@@ -530,7 +543,8 @@ public:
 
     void run_benchmark() {
         load_keys();
-        int n_runs = table_size / operations_num;
+	std::vector <std::pair<Operation, KEY_TYPE>> operations;
+        int n_runs = (table_size - (table_size * init_table_ratio)) / operations_num;
         generate_operations(keys, operations);
         for (auto s: all_index_type) {
             for (auto t: all_thread_num) {
