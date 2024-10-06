@@ -296,6 +296,21 @@ public:
         }
         init_table_size = insert_counter;
         COUT_VAR(operations.size());
+	// Update init_keys with new keys
+    	init_keys.resize(init_table_size);
+    	//std::copy(keys, keys + init_table_size, init_keys.begin());
+#pragma omp parallel for num_threads(thread_num)
+        for (size_t i = 0; i < init_table_size; ++i) {
+            init_keys[i] = (keys[i]);
+        }
+        tbb::parallel_sort(init_keys.begin(), init_keys.end());
+
+        init_key_values = new std::pair<KEY_TYPE, PAYLOAD_TYPE>[init_keys.size()];
+#pragma omp parallel for num_threads(thread_num)
+        for (int i = 0; i < init_keys.size(); i++) {
+            init_key_values[i].first = init_keys[i];
+            init_key_values[i].second = 123456789;
+        }
 
         delete[] sample_ptr;
     }
@@ -515,7 +530,7 @@ public:
 
     void run_benchmark() {
         load_keys();
-        int n_runs = table_size / (operations_num * 2);
+        int n_runs = table_size / operations_num;
         generate_operations(keys, operations);
         for (auto s: all_index_type) {
             for (auto t: all_thread_num) {
@@ -524,7 +539,7 @@ public:
                 index_t *index;
                 prepare(index, keys);
                 run(index, operations);
-		        for (int n = 0; n < n_runs; ++n) {
+		        for (int n = 0; n < (n_runs - 1); ++n) {
                     std::vector <std::pair<Operation, KEY_TYPE>> operations2;
 			        generate_operations(keys, operations2);
 			        run(index, operations2);
