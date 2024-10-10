@@ -60,6 +60,8 @@ class Benchmark {
     bool memory_record;
     bool dataset_statistic;
     bool data_shift = false;
+    //true if it is the generate operation before bulkload
+    bool is_first_call = true;
 
     std::unordered_set<KEY_TYPE> inserted_keys;
     std::vector <KEY_TYPE> init_keys;
@@ -279,7 +281,7 @@ public:
 		    
                 size_t sample_counter = sample_counter_dis(gen);
 		if (inserted_keys.find(sample_ptr[sample_counter]) != inserted_keys.end()) {
-                	operations.push_back(std::pair<Operation, KEY_TYPE>(READ, sample_ptr[sample_counter]));
+                	operations.push_back(std::pair<Operation, KEY_TYPE>(READ, sample_ptr[sample_counter++]));
 		}
             } else if (prob < read_ratio + insert_ratio) {
                 if (insert_counter >= table_size) {
@@ -287,15 +289,17 @@ public:
                     break;
                 }
                 operations.push_back(std::pair<Operation, KEY_TYPE>(INSERT, keys[insert_counter]));
+                inserted_keys.insert(keys[insert_counter]);
+                insert_counter++;
             } else if (prob < read_ratio + insert_ratio + update_ratio) {
                 size_t sample_counter = sample_counter_dis(gen);
 		if (inserted_keys.find(sample_ptr[sample_counter]) != inserted_keys.end()) {
-                	operations.push_back(std::pair<Operation, KEY_TYPE>(UPDATE, sample_ptr[sample_counter]));
+                	operations.push_back(std::pair<Operation, KEY_TYPE>(UPDATE, sample_ptr[sample_counter++]));
 		}
             } else if (prob < read_ratio + insert_ratio + update_ratio + scan_ratio) {
                 size_t sample_counter = sample_counter_dis(gen);
 		if (inserted_keys.find(sample_ptr[sample_counter]) != inserted_keys.end()) {
-                	operations.push_back(std::pair<Operation, KEY_TYPE>(SCAN, sample_ptr[sample_counter]));
+                	operations.push_back(std::pair<Operation, KEY_TYPE>(SCAN, sample_ptr[sample_counter++]));
 		}
             } else {
                 if (delete_counter >= table_size) {
@@ -303,30 +307,43 @@ public:
                     break;
                 }
                 operations.push_back(std::pair<Operation, KEY_TYPE>(DELETE, keys[delete_counter]));
-		inserted_keys.erase(keys[delete_counter]); // Remove key from set
+		        inserted_keys.erase(keys[delete_counter]); // Remove key from set
+                delete_counter++;
                 // operations.push_back(std::pair<Operation, KEY_TYPE>(DELETE, sample_ptr[sample_counter++]));
             }
         }
         init_table_size = insert_counter;
         COUT_VAR(operations.size());
-	// Update init_keys with new keys
-    	init_keys.resize(init_table_size);
-    	//std::copy(keys, keys + init_table_size, init_keys.begin());
-#pragma omp parallel for num_threads(thread_num)
-        for (size_t i = 0; i < init_table_size; ++i) {
-            init_keys[i] = (keys[i]);
-        }
-        tbb::parallel_sort(init_keys.begin(), init_keys.end());
-
-        init_key_values = new std::pair<KEY_TYPE, PAYLOAD_TYPE>[init_keys.size()];
-#pragma omp parallel for num_threads(thread_num)
-        for (int i = 0; i < init_keys.size(); i++) {
-            init_key_values[i].first = init_keys[i];
-            init_key_values[i].second = 123456789;
+        
+        //check if it is the first generation of operations
+        if(!is_first_call){
+            update_init_keys_and_values_threaded(keys, init_table_size, thread_num);
         }
 
         delete[] sample_ptr;
+        //set is_first_call to false
+        is_first_call = false;
     }
+
+    void update_init_keys_and_values(KEY_TYPE *keys, size_t init_table_size, int thread_num) {
+    // Update init_keys with new keys
+    init_keys.resize(init_table_size);
+
+#pragma omp parallel for num_threads(thread_num)
+    for (size_t i = 0; i < init_table_size; ++i) {
+        init_keys[i] = keys[i];
+    }
+
+    tbb::parallel_sort(init_keys.begin(), init_keys.end());
+
+    init_key_values = new std::pair<KEY_TYPE, PAYLOAD_TYPE>[init_keys.size()];
+
+#pragma omp parallel for num_threads(thread_num)
+    for (size_t i = 0; i < init_keys.size(); ++i) {
+        init_key_values[i].first = init_keys[i];
+        init_key_values[i].second = 123456789;
+    }
+}
 
     void run(index_t *index, std::vector <std::pair<Operation, KEY_TYPE>>& operations) {
         std::thread *thread_array = new std::thread[thread_num];
@@ -552,6 +569,8 @@ public:
                 index_type = s;
                 index_t *index;
                 prepare(index, keys);
+                //call init_keys_update after bulkloading
+                update_init_keys_and_values_threaded(keys, init_table_size, thread_num);
                 run(index, operations);
 		        for (int n = 0; n < (n_runs - 1); ++n) {
                     std::vector <std::pair<Operation, KEY_TYPE>> operations2;
