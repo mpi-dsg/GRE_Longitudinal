@@ -257,9 +257,9 @@ public:
         // generate operations(read, insert, update, scan)
         COUT_THIS("generate operations.");
         std::uniform_real_distribution<> ratio_dis(0, 1);
-        size_t insert_counter = init_table_size;
+        size_t insert_counter = init_table_size, sample_counter = 0;
         size_t delete_counter = table_size * (1 - del_table_ratio);
-        std::uniform_int_distribution<size_t> sample_counter_dis(0, insert_counter - 1);
+        //std::uniform_int_distribution<size_t> sample_counter_dis(0, insert_counter - 1);
 
         if (data_shift) {
             size_t rest_key_num = table_size - init_table_size;
@@ -279,7 +279,7 @@ public:
                 // }
                 // operations.push_back(std::pair<Operation, KEY_TYPE>(READ, keys[temp_counter++]));
 		    
-                size_t sample_counter = sample_counter_dis(gen);
+                //size_t sample_counter = sample_counter_dis(gen);
 		if (inserted_keys.find(sample_ptr[sample_counter]) != inserted_keys.end()) {
                 	operations.push_back(std::pair<Operation, KEY_TYPE>(READ, sample_ptr[sample_counter++]));
 		}
@@ -292,12 +292,12 @@ public:
                 inserted_keys.insert(keys[insert_counter]);
                 insert_counter++;
             } else if (prob < read_ratio + insert_ratio + update_ratio) {
-                size_t sample_counter = sample_counter_dis(gen);
+                //size_t sample_counter = sample_counter_dis(gen);
 		if (inserted_keys.find(sample_ptr[sample_counter]) != inserted_keys.end()) {
                 	operations.push_back(std::pair<Operation, KEY_TYPE>(UPDATE, sample_ptr[sample_counter++]));
 		}
             } else if (prob < read_ratio + insert_ratio + update_ratio + scan_ratio) {
-                size_t sample_counter = sample_counter_dis(gen);
+                //size_t sample_counter = sample_counter_dis(gen);
 		if (inserted_keys.find(sample_ptr[sample_counter]) != inserted_keys.end()) {
                 	operations.push_back(std::pair<Operation, KEY_TYPE>(SCAN, sample_ptr[sample_counter++]));
 		}
