@@ -441,8 +441,8 @@ public:
 
         // calculate dataset metric
         if (dataset_statistic) {
-            std::sort(keys, keys + table_size);
-            stat.fitness_of_dataset = pgmMetric::PGM_metric(keys, table_size, error_bound);
+            //std::sort(keys, keys + table_size);
+            //stat.fitness_of_dataset = pgmMetric::PGM_metric(keys, table_size, error_bound);
         }
 
         // record memory consumption
