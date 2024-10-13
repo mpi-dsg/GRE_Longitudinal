@@ -561,7 +561,7 @@ public:
     void run_benchmark() {
         load_keys();
 	std::vector <std::pair<Operation, KEY_TYPE>> operations;
-        int n_runs = (table_size - (table_size * init_table_ratio)) / operations_num;
+        int n_runs = (table_size - (table_size * init_table_ratio)) / (operations_num * insert_ratio);
         generate_operations(keys, operations);
         for (auto s: all_index_type) {
             for (auto t: all_thread_num) {
@@ -572,7 +572,7 @@ public:
                 //call init_keys_update after bulkloading
                 update_init_keys_and_values_threaded(keys, init_table_size, thread_num);
                 run(index, operations);
-		        for (int n = 0; n < (n_runs - 1); ++n) {
+		        for (int n = 0; n < n_runs - 1; ++n) {
                     std::vector <std::pair<Operation, KEY_TYPE>> operations2;
 			        generate_operations(keys, operations2);
 			        run(index, operations2);
