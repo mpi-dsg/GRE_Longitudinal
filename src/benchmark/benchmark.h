@@ -281,8 +281,9 @@ public:
 		    
                 //size_t sample_counter = sample_counter_dis(gen);
 		if (inserted_keys.find(sample_ptr[sample_counter]) != inserted_keys.end()) {
-                	operations.push_back(std::pair<Operation, KEY_TYPE>(READ, sample_ptr[sample_counter++]));
+                	operations.push_back(std::pair<Operation, KEY_TYPE>(READ, sample_ptr[sample_counter]));
 		}
+		sample_counter++;
             } else if (prob < read_ratio + insert_ratio) {
                 if (insert_counter >= table_size) {
                     operations_num = i;
