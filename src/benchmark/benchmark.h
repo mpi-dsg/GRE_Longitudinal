@@ -438,12 +438,16 @@ public:
             stat.scan_not_enough += p.scan_not_enough;
         }
         // calculate throughput
-        stat.throughput = static_cast<uint64_t>(operations_num / (diff/(double) 1000000000));
+        stat.throughput = static_cast<uint64_t>(operations.size() / (diff/(double) 1000000000));
 
         // calculate dataset metric
         if (dataset_statistic) {
             //std::sort(keys, keys + table_size);
             //stat.fitness_of_dataset = pgmMetric::PGM_metric(keys, table_size, error_bound);
+	    std::vector<KEY_TYPE> current_keys(inserted_keys.begin(), inserted_keys.end());
+	    tbb::parallel_sort(current_keys.begin(), current_keys.end());
+
+	    stat.fitness_of_dataset = pgmMetric::PGM_metric(current_keys.data(), current_keys.size(), error_bound);
         }
 
         // record memory consumption
