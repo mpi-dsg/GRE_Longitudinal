@@ -1,5 +1,5 @@
-# GRE
-GRE is a benchmark suite for learned indexes and traditional indexes to measure throughput and latency with custom workload (read / write ratio) and any dataset. GRE quantifies datasets using local and global hardness, and includes a synthetic data generator to generate data with various hardness.
+# GRE_Longitudinal
+GRE longitudinal is a temporal benchmark suite for learned indexes and traditional indexes to measure throughput and latency with custom workload (read / write ratio) and any dataset. GRE_Logitudinal is extended from the original GRE benchmark in the paper below.
 
 See details in our VLDB 2022 paper below. If you use our work, please cite:
 ```
@@ -30,7 +30,7 @@ To calculate throughput:
 --keys_file=./data/dataset \
 --keys_file_type={binary,text} \
 --read=0.5 --insert=0.5 \
---operations_num=800000000 \
+--operations_num=50000000 \
 --table_size=-1 \
 --init_table_ratio=0.5 \
 --thread_num=24 \
