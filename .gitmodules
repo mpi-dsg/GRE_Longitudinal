@@ -33,3 +33,6 @@
 [submodule "src/competitor/hot/src"]
 	path = src/competitor/hot/src
 	url = https://github.com/speedskater/hot.git
+[submodule "src/competitor/sali/src"]
+	path = src/competitor/sali/src
+	url = https://github.com/cds-ruc/SALI.git
