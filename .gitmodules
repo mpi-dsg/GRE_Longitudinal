@@ -36,6 +36,7 @@
 [submodule "src/competitor/sali/src"]
 	path = src/competitor/sali/src
 	url = https://github.com/cds-ruc/SALI.git
+
 [submodule "src/competitor/kanva/src"]
 	path = src/competitor/kanva/src
-	url = https://github.com/maqamylee0/Kanva
+	url = https://github.com/maqamylee0/Kanva.git
