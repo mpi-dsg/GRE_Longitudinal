@@ -16,6 +16,7 @@
 #include "wormhole_u64/wormhole_u64.h"
 #include "masstree/masstree.h"
 #include "finedex/finedex.h"
+#include "sali/sali.h"
 #include "kanva/kanva_RS.h"
 #include "iostream"
 
@@ -72,6 +73,9 @@ indexInterface<KEY_TYPE, PAYLOAD_TYPE> *get_index(std::string index_type) {
   }
   else if (index_type == "finedex") {
     index = new finedexInterface<KEY_TYPE, PAYLOAD_TYPE>;
+  }
+  else if (index_type == "sali") {
+    index = new SALIInterface<KEY_TYPE, PAYLOAD_TYPE>;
   }
   else if (index_type == "kanva") {
     index = new kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>;
