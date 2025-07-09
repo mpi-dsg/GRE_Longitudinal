@@ -58,11 +58,14 @@ private:
   kanva_RS::Kanva_RS<KEY_TYPE, PAYLOAD_TYPE>* index;
   std::unique_ptr<std::atomic<bool>[]> thread_initialized;
   int max_threads;
-  inline int get_thread_id() {
-    return omp_get_thread_num();
+  inline int get_thread_id(Param *param = nullptr) {
+    if (param && param->thread_id >= 0) {
+      return param->thread_id; // Use the thread ID passed by the benchmark
+    }
+    return omp_get_thread_num(); // Fallback to OpenMP (for bulk_load or other cases)
   }
-  inline void ensure_thread_initialized() {
-    int tid = get_thread_id();
+  inline void ensure_thread_initialized(Param *param = nullptr) {
+    int tid = get_thread_id(param);
     if (tid >= max_threads || tid < 0) {
       // This should not happen, but if it does, print error and abort
       std::cerr << "FATAL ERROR: Invalid thread ID " << tid << " (max_threads=" << max_threads << ")" << std::endl;
@@ -85,7 +88,7 @@ private:
 
 template<class KEY_TYPE, class PAYLOAD_TYPE>
 void kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>::bulk_load(std::pair <KEY_TYPE, PAYLOAD_TYPE> *key_value, size_t num, Param *param) {
-  ensure_thread_initialized();
+  ensure_thread_initialized(param); // KEEP THIS - Initialize during bulk loading only
   std::vector<KEY_TYPE> key_temp;
   std::vector<PAYLOAD_TYPE> val_temp;
   key_temp.reserve(num);
@@ -94,13 +97,13 @@ void kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>::bulk_load(std::pair <KEY_TYPE, PAYL
       key_temp.push_back(key_value[i].first);
       val_temp.push_back(key_value[i].second);
   }
-  index->train(key_temp, val_temp, 32, get_thread_id()); // Add thread_id_t parameter (0)
+  index->train(key_temp, val_temp, 32, get_thread_id(param));
 }
 
 template<class KEY_TYPE, class PAYLOAD_TYPE>
 bool kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>::get(KEY_TYPE key, PAYLOAD_TYPE &val, Param *param) {
-  ensure_thread_initialized();
-  kanva_RS::result_t res = index->find(key, val, get_thread_id());
+  ensure_thread_initialized(param); // Initialize if needed - using param->thread_id
+  kanva_RS::result_t res = index->find(key, val, get_thread_id(param));
   if(res == kanva_RS::result_t::ok) {
     return true;
   }
@@ -109,8 +112,8 @@ bool kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>::get(KEY_TYPE key, PAYLOAD_TYPE &val
 
 template<class KEY_TYPE, class PAYLOAD_TYPE>
 bool kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>::put(KEY_TYPE key, PAYLOAD_TYPE value, Param *param) {
-  ensure_thread_initialized();
-  kanva_RS::result_t res = index->insert(key, value, get_thread_id());
+  ensure_thread_initialized(param); // Initialize if needed - using param->thread_id  
+  kanva_RS::result_t res = index->insert(key, value, get_thread_id(param));
   if(res == kanva_RS::result_t::ok) {
     return true;
   }
@@ -119,8 +122,8 @@ bool kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>::put(KEY_TYPE key, PAYLOAD_TYPE valu
 
 template<class KEY_TYPE, class PAYLOAD_TYPE>
 bool kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>::update(KEY_TYPE key, PAYLOAD_TYPE value, Param *param) {
-  ensure_thread_initialized();
-  kanva_RS::result_t res = index->update(key, value, get_thread_id());
+  ensure_thread_initialized(param); // Initialize if needed - using param->thread_id
+  kanva_RS::result_t res = index->update(key, value, get_thread_id(param));
   if(res == kanva_RS::result_t::ok) {
     return true;
   }
@@ -129,8 +132,8 @@ bool kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>::update(KEY_TYPE key, PAYLOAD_TYPE v
 
 template<class KEY_TYPE, class PAYLOAD_TYPE>
 bool kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>::remove(KEY_TYPE key, Param *param) {
- ensure_thread_initialized();
- kanva_RS::result_t res = index->remove(key, get_thread_id());
+ ensure_thread_initialized(param); // Initialize if needed - using param->thread_id
+ kanva_RS::result_t res = index->remove(key, get_thread_id(param));
   if(res == kanva_RS::result_t::ok) {
     return true;
   }
@@ -141,9 +144,9 @@ template<class KEY_TYPE, class PAYLOAD_TYPE>
 size_t kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>::scan(KEY_TYPE key_low_bound, size_t key_num,
                                                    std::pair<KEY_TYPE, PAYLOAD_TYPE> *result,
                                                    Param *param) {
-  ensure_thread_initialized();
+  ensure_thread_initialized(param); // Initialize if needed - using param->thread_id
   std::vector<std::pair<KEY_TYPE, PAYLOAD_TYPE>> res;
   res.reserve(key_num);
-  size_t scan_size = index->rangequery(key_low_bound, key_num, res, get_thread_id());
+  size_t scan_size = index->rangequery(key_low_bound, key_num, res, get_thread_id(param));
   return scan_size;
 }
