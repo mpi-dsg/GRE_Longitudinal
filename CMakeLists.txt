@@ -20,16 +20,24 @@ include_directories(SYSTEM src/competitor/hot/src/libs/hot/commons/include)
 include_directories(SYSTEM src/competitor/hot/src/libs/hot/rowex/include)
 include_directories(SYSTEM src/competitor/hot/src/libs/hot/single-threaded/include)
 include_directories(SYSTEM src/competitor/hot/src/libs/idx/content-helpers/include)
+include_directories(SYSTEM src/competitor/dili/src/src)
+include_directories(SYSTEM src/competitor/dili/src/src/global)
+include_directories(SYSTEM src/competitor/dili/src/src/utils)
+include_directories(SYSTEM src/competitor/dili/src/src/butree)
+include_directories(SYSTEM src/competitor/dili/src/src/dili)
 
 add_compile_options(-faligned-new -march=native -g -O3)
 
 # add_subdirectory(src/competitor/wormhole)
 add_subdirectory(src/competitor/wormhole_u64)
 add_subdirectory(src/competitor/masstree)
+add_subdirectory(src/competitor/dili/src)
 
 # microbench
 add_executable(microbench
         ${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark/microbench.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dili/dili_wrapper.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dili/dili_impl.cpp
     )
 
 target_link_libraries(microbench
@@ -37,6 +45,10 @@ target_link_libraries(microbench
         # WORMHOLE
         WORMHOLEU64
         MASSTREE
+        dili_func
+        butree_func
+        global_func
+        utils_func
 )
 
 target_link_libraries(microbench PUBLIC OpenMP::OpenMP_CXX ${JEMALLOC_LIBRARIES} ${MKL_LIBRARIES} ${TBB_LIBRARIES})

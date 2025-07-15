@@ -40,3 +40,9 @@
 [submodule "src/competitor/kanva/src"]
 	path = src/competitor/kanva/src
 	url = https://github.com/maqamylee0/Kanva.git
+[submodule "src/competitior/dili/src"]
+	path = src/competitior/dili/src
+	url = https://github.com/pfl-cs/DILI.git
+[submodule "src/competitor/dili/src"]
+	path = src/competitor/dili/src
+	url = https://github.com/pfl-cs/DILI.git

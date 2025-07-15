@@ -21,6 +21,9 @@
 #include "masstree/masstree.h"
 #include "iostream"
 
+// Include DILI last to avoid macro conflicts
+#include "dili/dili.h"
+
 
 template<class KEY_TYPE, class PAYLOAD_TYPE>
 indexInterface<KEY_TYPE, PAYLOAD_TYPE> *get_index(std::string index_type) {
@@ -81,6 +84,9 @@ indexInterface<KEY_TYPE, PAYLOAD_TYPE> *get_index(std::string index_type) {
   }
   else if (index_type == "kanva") {
     index = new kanvaImplInterface<KEY_TYPE, PAYLOAD_TYPE>;
+  }
+  else if (index_type == "dili") {
+    index = new diliInterface<KEY_TYPE, PAYLOAD_TYPE>;
   }
   // else if (index_type == "kanva_rs") {
   //   index = new kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>;
