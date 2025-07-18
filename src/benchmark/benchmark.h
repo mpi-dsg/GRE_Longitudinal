@@ -54,8 +54,6 @@ class Benchmark {
     size_t thread_num = 1;
     size_t sample_counter = 0;
     size_t delete_counter = table_size * (1 - del_table_ratio);
-    std::vector<std::string> all_index_type;
-    std::vector<std::string> all_thread_num;
     std::string index_type;
     std::string keys_file_path;
     std::string keys_file_type;
@@ -207,7 +205,7 @@ public:
         init_table_ratio = stod(get_with_default(flags, "init_table_ratio", "0.5"));
         del_table_ratio = stod(get_with_default(flags, "del_table_ratio", "0.5"));
         init_table_size = 0;
-        all_thread_num = get_comma_separated(flags, "thread_num");
+        thread_num = stoi(get_with_default(flags, "thread_num", "1"));
         index_type = get_with_default(flags, "index", "alexol");
         sample_distribution = get_with_default(flags, "sample_distribution", "uniform");
         latency_sample = get_boolean_flag(flags, "latency_sample");
@@ -237,7 +235,7 @@ public:
         double insert_delete = insert_ratio + delete_ratio;
         INVARIANT(ratio_sum > 0.9999 && ratio_sum < 1.0001);
         INVARIANT(sample_distribution == "zipf" || sample_distribution == "uniform");
-        INVARIANT(all_thread_num.size() > 0);
+        INVARIANT(thread_num > 0);
     }
 
     void generate_operations(KEY_TYPE* keys, std::vector<std::pair<Operation, KEY_TYPE>>& operations, 
@@ -743,21 +741,17 @@ public:
         if (read_ratio == 1.0) n_runs = 2;
         
         generate_operations(keys, operations, index_type);
-        for (auto t: all_thread_num) {
-            thread_num = stoi(t);
-            index_t* index;
-            prepare(index, keys);
-            run(index, operations);
-            update_init_keys_and_values_threaded(keys, init_table_size, thread_num);
-            for (int n = 0; n < n_runs - 1; ++n) {
-                COUT_THIS("start with loop function");
-                std::vector<std::pair<Operation, KEY_TYPE>> operations2;
-                generate_operations(keys, operations2, index_type);
-                COUT_THIS("done with run function");
-                run(index, operations2);
-            }
-            if (index != nullptr) delete index;
-       }        
-        
-    }
+        index_t* index;
+        prepare(index, keys);
+        run(index, operations);
+        update_init_keys_and_values_threaded(keys, init_table_size, thread_num);
+          for (int n = 0; n < n_runs - 1; ++n) {
+              COUT_THIS("start with loop function");
+              std::vector<std::pair<Operation, KEY_TYPE>> operations2;
+              generate_operations(keys, operations2, index_type);
+              COUT_THIS("done with run function");
+              run(index, operations2);
+          }
+          if (index != nullptr) delete index;
+     }                
 };
