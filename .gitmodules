@@ -46,3 +46,6 @@
 [submodule "src/competitor/dili/src"]
 	path = src/competitor/dili/src
 	url = https://github.com/pfl-cs/DILI.git
+[submodule "src/competitor/hyper/src"]
+	path = src/competitor/hyper/src
+	url = https://gitlab.rlp.net/zdvresearch/hyper-reimplementation.git

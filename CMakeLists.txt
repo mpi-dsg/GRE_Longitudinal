@@ -25,6 +25,7 @@ include_directories(SYSTEM src/competitor/dili/src/src/global)
 include_directories(SYSTEM src/competitor/dili/src/src/utils)
 include_directories(SYSTEM src/competitor/dili/src/src/butree)
 include_directories(SYSTEM src/competitor/dili/src/src/dili)
+include_directories(SYSTEM src/competitor/hyper/src/include)
 
 add_compile_options(-faligned-new -march=native -g -O3)
 
@@ -38,6 +39,14 @@ add_executable(microbench
         ${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark/microbench.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dili/dili_wrapper.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dili/dili_impl.cpp
+        # ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dilol/dilol_wrapper.cpp
+        # ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dilol/dilol_impl.cpp
+        # ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dilol/src/concurrent_global_types.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/hyper/src/src/hyper_index.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/hyper/src/src/leaf_node.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/hyper/src/src/model_inner_node.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/hyper/src/src/search_inner_node.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/hyper/src/src/overflow_buffer.cpp
     )
 
 target_link_libraries(microbench

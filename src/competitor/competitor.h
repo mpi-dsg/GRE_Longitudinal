@@ -1,4 +1,6 @@
 #include"./indexInterface.h"
+#include "hyper/hyper.h"
+
 #include "./alex/alex.h"
 #include "./alexol/alex.h"
 #include "./artsync/artrowex.h"
@@ -10,7 +12,7 @@
 #include "./hot/hotrowex.h"
 #include "./lipp/lipp.h"
 #include "./lippol/lippol.h"
-#include "pgm/pgm.h"
+// #include "pgm/pgm.h"
 #include "btree/btree.h"
 // #include "wormhole/wormhole.h"
 #include "wormhole_u64/wormhole_u64.h"
@@ -21,9 +23,9 @@
 #include "masstree/masstree.h"
 #include "iostream"
 
-// Include DILI last to avoid macro conflicts
+// Include DILI variants last to avoid macro conflicts
 #include "dili/dili.h"
-
+// #include "dilol/dilol.h"
 
 template<class KEY_TYPE, class PAYLOAD_TYPE>
 indexInterface<KEY_TYPE, PAYLOAD_TYPE> *get_index(std::string index_type) {
@@ -55,9 +57,9 @@ indexInterface<KEY_TYPE, PAYLOAD_TYPE> *get_index(std::string index_type) {
   else if (index_type == "xindex") {
     index = new xindexInterface<KEY_TYPE, PAYLOAD_TYPE>;
   }
-  else if (index_type == "pgm") {
-    index = new pgmInterface<KEY_TYPE, PAYLOAD_TYPE>;
-  }
+  // else if (index_type == "pgm") {
+  //   index = new pgmInterface<KEY_TYPE, PAYLOAD_TYPE>;
+  // }
   else if(index_type == "btree") {
     index = new BTreeInterface<KEY_TYPE, PAYLOAD_TYPE>;
   }
@@ -87,6 +89,12 @@ indexInterface<KEY_TYPE, PAYLOAD_TYPE> *get_index(std::string index_type) {
   }
   else if (index_type == "dili") {
     index = new diliInterface<KEY_TYPE, PAYLOAD_TYPE>;
+  }
+  // else if (index_type == "dilol") {
+  //   index = new dilolInterface<KEY_TYPE, PAYLOAD_TYPE>;
+  // }
+  else if (index_type == "hyper") {
+    index = new HyperInterface<KEY_TYPE, PAYLOAD_TYPE>;
   }
   // else if (index_type == "kanva_rs") {
   //   index = new kanvaInterface<KEY_TYPE, PAYLOAD_TYPE>;
