@@ -49,3 +49,6 @@
 [submodule "src/competitor/hyper/src"]
 	path = src/competitor/hyper/src
 	url = https://gitlab.rlp.net/zdvresearch/hyper-reimplementation.git
+[submodule "src/competitor/dilax/src"]
+	path = src/competitor/dilax/src
+	url = https://github.com/maqamylee0/DILAX.git

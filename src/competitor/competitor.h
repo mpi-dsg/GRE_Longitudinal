@@ -1,4 +1,5 @@
 #include"./indexInterface.h"
+#include "pgm/pgm.h"
 #include "hyper/hyper.h"
 
 #include "./alex/alex.h"
@@ -25,7 +26,7 @@
 
 // Include DILI variants last to avoid macro conflicts
 #include "dili/dili.h"
-// #include "dilol/dilol.h"
+#include "dilax/dilax.h"
 
 template<class KEY_TYPE, class PAYLOAD_TYPE>
 indexInterface<KEY_TYPE, PAYLOAD_TYPE> *get_index(std::string index_type) {
@@ -90,9 +91,9 @@ indexInterface<KEY_TYPE, PAYLOAD_TYPE> *get_index(std::string index_type) {
   else if (index_type == "dili") {
     index = new diliInterface<KEY_TYPE, PAYLOAD_TYPE>;
   }
-  // else if (index_type == "dilol") {
-  //   index = new dilolInterface<KEY_TYPE, PAYLOAD_TYPE>;
-  // }
+  else if (index_type == "dilax") {
+    index = new dilaxInterface<KEY_TYPE, PAYLOAD_TYPE>;
+  }
   else if (index_type == "hyper") {
     index = new HyperInterface<KEY_TYPE, PAYLOAD_TYPE>;
   }

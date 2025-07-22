@@ -25,6 +25,11 @@ include_directories(SYSTEM src/competitor/dili/src/src/global)
 include_directories(SYSTEM src/competitor/dili/src/src/utils)
 include_directories(SYSTEM src/competitor/dili/src/src/butree)
 include_directories(SYSTEM src/competitor/dili/src/src/dili)
+include_directories(SYSTEM src/competitor/dilax/src/src)
+include_directories(SYSTEM src/competitor/dilax/src/src/global)
+include_directories(SYSTEM src/competitor/dilax/src/src/utils)
+include_directories(SYSTEM src/competitor/dilax/src/src/butree)
+include_directories(SYSTEM src/competitor/dilax/src/src/dilax)
 include_directories(SYSTEM src/competitor/hyper/src/include)
 
 add_compile_options(-faligned-new -march=native -g -O3)
@@ -33,12 +38,11 @@ add_compile_options(-faligned-new -march=native -g -O3)
 add_subdirectory(src/competitor/wormhole_u64)
 add_subdirectory(src/competitor/masstree)
 add_subdirectory(src/competitor/dili/src)
+add_subdirectory(src/competitor/dilax/src)
 
 # microbench
 add_executable(microbench
         ${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark/microbench.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dili/dili_wrapper.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dili/dili_impl.cpp
         # ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dilol/dilol_wrapper.cpp
         # ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dilol/dilol_impl.cpp
         # ${CMAKE_CURRENT_SOURCE_DIR}/src/competitor/dilol/src/concurrent_global_types.cpp
@@ -58,6 +62,10 @@ target_link_libraries(microbench
         butree_func
         global_func
         utils_func
+        dilax_func
+        dilax_butree_func
+        dilax_global_func
+        dilax_utils_func
 )
 
 target_link_libraries(microbench PUBLIC OpenMP::OpenMP_CXX ${JEMALLOC_LIBRARIES} ${MKL_LIBRARIES} ${TBB_LIBRARIES})
