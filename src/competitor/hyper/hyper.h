@@ -74,14 +74,12 @@ bool HyperInterface<KEY_TYPE, PAYLOAD_TYPE>::put(KEY_TYPE key, PAYLOAD_TYPE valu
 template<class KEY_TYPE, class PAYLOAD_TYPE>
 bool HyperInterface<KEY_TYPE, PAYLOAD_TYPE>::update(KEY_TYPE key, PAYLOAD_TYPE value, Param *param) {
     // Hyper doesn't have a dedicated update method, so we treat it as insert
-    // This follows the pattern of other learned indexes in the framework
     return put(key, value, param);
 }
 
 template<class KEY_TYPE, class PAYLOAD_TYPE>
 bool HyperInterface<KEY_TYPE, PAYLOAD_TYPE>::remove(KEY_TYPE key, Param *param) {
     // Hyper doesn't support deletion in the current implementation
-    // This is common for learned indexes optimized for read-heavy workloads
     return false;
 }
 
@@ -117,6 +115,5 @@ size_t HyperInterface<KEY_TYPE, PAYLOAD_TYPE>::scan(KEY_TYPE key_low_bound, size
 template<class KEY_TYPE, class PAYLOAD_TYPE>
 long long HyperInterface<KEY_TYPE, PAYLOAD_TYPE>::memory_consumption() {
     // Hyper doesn't provide a direct memory consumption method
-    // Return 0 as placeholder (common pattern in this framework)
     return 0;
 }
