@@ -14,6 +14,8 @@
 #include <thread>
 #include <ctime>
 #include <unordered_set>
+#include <stdexcept>
+#include <sstream>
 
 #include "../tscns.h"
 #include "omp.h"
@@ -54,6 +56,8 @@ class Benchmark {
     size_t thread_num = 1;
     size_t sample_counter = 0;
     size_t delete_counter = table_size * (1 - del_table_ratio);
+    std::vector<std::string> all_index_type;
+    std::vector<std::string> all_thread_num;
     std::string index_type;
     std::string keys_file_path;
     std::string keys_file_type;
@@ -77,6 +81,10 @@ class Benchmark {
     std::pair<KEY_TYPE, PAYLOAD_TYPE>* init_key_values;
     std::mt19937 gen;
     int iteration_num = 0;
+    
+    // New: Store all operations organized by iteration
+    std::vector<std::vector<std::pair<Operation, KEY_TYPE>>> all_iterations_operations;
+    bool all_operations_generated = false;
 
     struct Stat {
         std::vector<double> read_latency;
@@ -117,6 +125,7 @@ class Benchmark {
 
 public:
     Benchmark() {
+        init_key_values = nullptr;
     }
 
     KEY_TYPE* load_keys() {
@@ -207,6 +216,46 @@ public:
         init_table_size = 0;
         thread_num = stoi(get_with_default(flags, "thread_num", "1"));
         index_type = get_with_default(flags, "index", "alexol");
+        
+        // Parse multiple index types and thread counts for nested loops
+        std::string all_indices_str = get_with_default(flags, "all_index", "");
+        std::string all_threads_str = get_with_default(flags, "all_thread", "");
+        
+        // Check if we have comma-separated values using get_comma_separated (if available)
+        // Otherwise fall back to manual parsing
+        try {
+            if (!all_indices_str.empty()) {
+                // Parse comma-separated index types
+                std::stringstream ss(all_indices_str);
+                std::string item;
+                while (std::getline(ss, item, ',')) {
+                    all_index_type.push_back(item);
+                }
+            } else {
+                // Try get_comma_separated function if available, otherwise use single index
+                // all_index_type = get_comma_separated(flags, "index");
+                // For now, use single index type
+                all_index_type.push_back(index_type);
+            }
+            
+            if (!all_threads_str.empty()) {
+                // Parse comma-separated thread counts
+                std::stringstream ss(all_threads_str);
+                std::string item;
+                while (std::getline(ss, item, ',')) {
+                    all_thread_num.push_back(item);
+                }
+            } else {
+                // Try get_comma_separated function if available, otherwise use single thread count
+                // all_thread_num = get_comma_separated(flags, "thread_num");
+                // For now, use single thread count
+                all_thread_num.push_back(std::to_string(thread_num));
+            }
+        } catch (...) {
+            // Fallback to single values if parsing fails
+            all_index_type.push_back(index_type);
+            all_thread_num.push_back(std::to_string(thread_num));
+        }
         sample_distribution = get_with_default(flags, "sample_distribution", "uniform");
         latency_sample = get_boolean_flag(flags, "latency_sample");
         latency_sample_ratio = stod(get_with_default(flags, "latency_sample_ratio", "0.01"));
@@ -236,6 +285,23 @@ public:
         INVARIANT(ratio_sum > 0.9999 && ratio_sum < 1.0001);
         INVARIANT(sample_distribution == "zipf" || sample_distribution == "uniform");
         INVARIANT(thread_num > 0);
+        INVARIANT(all_index_type.size() > 0);
+        INVARIANT(all_thread_num.size() > 0);
+        
+        COUT_THIS("Configured for " << all_index_type.size() << " index types and " 
+                  << all_thread_num.size() << " thread configurations");
+        
+        std::cout << "Index types: ";
+        for (const auto& idx : all_index_type) {
+            std::cout << idx << " ";
+        }
+        std::cout << std::endl;
+        
+        std::cout << "Thread counts: ";
+        for (const auto& thr : all_thread_num) {
+            std::cout << thr << " ";
+        }
+        std::cout << std::endl;
     }
 
     void generate_operations(KEY_TYPE* keys, std::vector<std::pair<Operation, KEY_TYPE>>& operations, 
@@ -565,8 +631,10 @@ public:
         stat.throughput = static_cast<uint64_t>(operations.size() / (diff/(double) 1000000000));
 
         if (dataset_statistic) {
-            tbb::parallel_sort(init_keys.begin(), init_keys.end());
-            stat.fitness_of_dataset = pgmMetric::PGM_metric(init_keys.data(), init_keys.size(), error_bound);
+            // Calculate PGM metric on all keys currently in the index (not just init_keys)
+            std::vector<KEY_TYPE> current_keys(inserted_keys.begin(), inserted_keys.end());
+            tbb::parallel_sort(current_keys.begin(), current_keys.end());
+            stat.fitness_of_dataset = pgmMetric::PGM_metric(current_keys.data(), current_keys.size(), error_bound);
         }
 
         if (memory_record)
@@ -735,23 +803,392 @@ public:
 
     void run_benchmark() {
         load_keys();
-    
-        std::vector<std::pair<Operation, KEY_TYPE>> operations;
+        
+        // Store original init state for resets
+        std::vector<KEY_TYPE> original_init_keys = init_keys;
+        std::unordered_set<KEY_TYPE> original_inserted_keys = inserted_keys;
+        
+        // Calculate number of runs (same for all index/thread combinations)
         int n_runs = (table_size - (table_size * init_table_ratio)) / (operations_num * insert_ratio);
         if (read_ratio == 1.0) n_runs = 2;
         
-        generate_operations(keys, operations, index_type);
-        index_t* index;
-        prepare(index, keys);
-        run(index, operations);
-        update_init_keys_and_values_threaded(keys, init_table_size, thread_num);
-          for (int n = 0; n < n_runs - 1; ++n) {
-              COUT_THIS("start with loop function");
-              std::vector<std::pair<Operation, KEY_TYPE>> operations2;
-              generate_operations(keys, operations2, index_type);
-              COUT_THIS("done with run function");
-              run(index, operations2);
-          }
-          if (index != nullptr) delete index;
-     }                
+        // Generate all operations for all iterations ONCE before any index/thread loops
+        // This ensures the same operations are used for all index types and thread counts
+        COUT_THIS("Generating operations for " << n_runs << " iterations to be used across all index/thread combinations");
+        generate_all_iterations_operations(keys, n_runs, "shared");
+        
+        // Nested loops over all index types and thread counts
+        for (const std::string& current_index_type : all_index_type) {
+            for (const std::string& current_thread_str : all_thread_num) {
+                size_t current_thread_count = std::stoul(current_thread_str);
+                
+                COUT_THIS("Running benchmark for index: " << current_index_type 
+                         << ", threads: " << current_thread_count << " (using shared pre-generated operations)");
+                
+                // Set current parameters
+                index_type = current_index_type;
+                thread_num = current_thread_count;
+                
+                // Reset state for this index/thread combination
+                reset_state_for_new_index();
+                
+                // Restore original init state - THIS MUST COME AFTER RESET
+                init_keys = original_init_keys;
+                inserted_keys = original_inserted_keys;
+                init_table_size = original_init_keys.size();
+                
+                // CRITICAL: Rebuild init_key_values to match the restored init_keys
+                if (init_key_values != nullptr) {
+                    delete[] init_key_values;  // Clean up previous allocation
+                }
+                init_key_values = new std::pair<KEY_TYPE, PAYLOAD_TYPE>[init_keys.size()];
+                for (size_t i = 0; i < init_keys.size(); ++i) {
+                    init_key_values[i].first = init_keys[i];
+                    init_key_values[i].second = 123456789;
+                }
+                
+                COUT_THIS("Restored original state: " << inserted_keys.size() << " inserted keys");
+                COUT_THIS("Rebuilt init_key_values with " << init_keys.size() << " key-value pairs");
+                
+                // Run first iteration using pre-generated operations
+                COUT_THIS("Starting iteration 1 of " << n_runs 
+                         << " for " << index_type << " with " << thread_num << " threads (using shared pre-generated operations)");
+                std::vector<std::pair<Operation, KEY_TYPE>>& operations = get_operations_for_iteration(0);
+                
+                COUT_THIS("First iteration operations summary:");
+                COUT_THIS("  Total operations: " << operations.size());
+                COUT_THIS("  Reads: " << std::count_if(operations.begin(), operations.end(), [](const auto& op) { return op.first == READ; }));
+                COUT_THIS("  Inserts: " << std::count_if(operations.begin(), operations.end(), [](const auto& op) { return op.first == INSERT; }));
+                COUT_THIS("  Updates: " << std::count_if(operations.begin(), operations.end(), [](const auto& op) { return op.first == UPDATE; }));
+                COUT_THIS("  Deletes: " << std::count_if(operations.begin(), operations.end(), [](const auto& op) { return op.first == DELETE; }));
+                COUT_THIS("  Current inserted_keys size: " << inserted_keys.size());
+                COUT_THIS("  Current init_keys size: " << init_keys.size());
+                
+                index_t* index;
+                prepare(index, keys);
+                run(index, operations);
+                
+                // Update real state based on executed operations
+                update_state_after_iteration(operations);
+                
+                // Update init_table_size to reflect newly inserted keys
+                init_table_size = inserted_keys.size();
+                COUT_THIS("Updated init_table_size to: " << init_table_size);
+                
+                update_init_keys_and_values_threaded(keys, init_table_size, thread_num);
+                
+                // Run remaining iterations using pre-generated operations
+                for (int iter_idx = 1; iter_idx < n_runs; ++iter_idx) {
+                    COUT_THIS("Starting iteration " << (iter_idx + 1) << " of " << n_runs 
+                             << " for " << index_type << " with " << thread_num << " threads (using shared pre-generated operations)");
+                    std::vector<std::pair<Operation, KEY_TYPE>>& operations_iter = get_operations_for_iteration(iter_idx);
+                    run(index, operations_iter);
+                    
+                    // Update real state based on executed operations
+                    update_state_after_iteration(operations_iter);
+                    
+                    // Update init_table_size to reflect newly inserted keys
+                    init_table_size = inserted_keys.size();
+                    COUT_THIS("Updated init_table_size to: " << init_table_size);
+                }
+                
+                if (index != nullptr) {
+                    delete index;
+                    index = nullptr;
+                }
+                
+                COUT_THIS("Completed benchmark for " << index_type << " with " << thread_num << " threads");
+            }
+        }
+    }                
+
+    // Function to update real state after executing operations for an iteration
+    void update_state_after_iteration(const std::vector<std::pair<Operation, KEY_TYPE>>& executed_operations) {
+        for (const auto& op : executed_operations) {
+            const Operation operation = op.first;
+            const KEY_TYPE key = op.second;
+            
+            switch (operation) {
+                case INSERT:
+                    inserted_keys.insert(key);
+                    deleted_keys.erase(key); // Remove from deleted if it was there
+                    break;
+                case DELETE:
+                    inserted_keys.erase(key);
+                    deleted_keys.insert(key);
+                    break;
+                case READ:
+                case UPDATE:
+                case SCAN:
+                    // These don't change the key state
+                    break;
+            }
+        }
+        
+        // Update iteration number to match what the original logic would do
+        iteration_num++;
+        
+        COUT_THIS("Updated real state after iteration " << iteration_num);
+        COUT_THIS("Currently inserted keys: " << inserted_keys.size());
+        COUT_THIS("Currently deleted keys: " << deleted_keys.size());
+    }
+
+    // Function to reset benchmark state between different index/thread combinations
+    void reset_state_for_new_index() {
+        // DO NOT reset operation generation state - we want to reuse the same operations
+        // all_operations_generated = false;
+        // all_iterations_operations.clear();
+        
+        // Reset key tracking state (restore to initial state after load_keys)
+        inserted_keys.clear();
+        deleted_keys.clear();
+        
+        // Reset counters and execution state to match the generation state
+        sample_counter = 0;
+        iteration_num = 0;
+        is_first_call = true;
+        current_batch_sorted = false;
+        
+        // Reset statistics
+        stat.clear();
+        
+        COUT_THIS("Reset state for new index/thread combination");
+        COUT_THIS("Keeping shared pre-generated operations intact");
+    }
+
+    void generate_all_iterations_operations(KEY_TYPE* keys, int n_runs, const std::string& current_index_name) {
+        COUT_THIS("Generating all operations for all iterations at start");
+        
+        all_iterations_operations.clear();
+        all_iterations_operations.resize(n_runs);
+        
+        // Simulate state for each iteration - create working copies
+        std::unordered_set<KEY_TYPE> sim_inserted_keys = inserted_keys;
+        std::unordered_set<KEY_TYPE> sim_deleted_keys = deleted_keys;
+        std::vector<KEY_TYPE> sim_init_keys = init_keys;
+        size_t sim_init_table_size = init_table_size;
+        size_t sim_sample_counter = sample_counter;
+        int sim_iteration_num = iteration_num;
+        bool sim_is_first_call = is_first_call;
+        bool sim_current_batch_sorted = current_batch_sorted;
+        
+        for (int iter = 0; iter < n_runs; ++iter) {
+            COUT_THIS("Simulating operation generation for iteration " << (iter + 1) << " of " << n_runs);
+            
+            // Generate operations for this iteration using simulated state
+            std::vector<std::pair<Operation, KEY_TYPE>>& iter_operations = all_iterations_operations[iter];
+            
+            INVARIANT(delete_ratio * operations_num < sim_init_table_size);
+            
+            sim_iteration_num++;
+            iter_operations.clear();
+            iter_operations.reserve(operations_num);
+            
+            const size_t total_ops = operations_num;
+            const size_t read_count = static_cast<size_t>(total_ops * read_ratio);
+            const size_t insert_count = static_cast<size_t>(total_ops * insert_ratio);
+            const size_t update_count = static_cast<size_t>(total_ops * update_ratio);
+            const size_t scan_count = static_cast<size_t>(total_ops * scan_ratio);
+            const size_t delete_count = static_cast<size_t>(total_ops * delete_ratio);
+            
+            // Track available keys for operations using simulated state
+            std::vector<KEY_TYPE> available_keys_vec(sim_inserted_keys.begin(), sim_inserted_keys.end());
+            size_t next_insert_pos = sim_init_table_size;
+            
+            // First generate all operations with their keys
+            std::vector<std::pair<Operation, KEY_TYPE>> temp_operations;
+            temp_operations.reserve(total_ops);
+            
+            // Generate deletes (using existing keys)
+            std::unordered_set<KEY_TYPE> keys_to_delete;
+            for (size_t i = 0; i < delete_count; i++) {
+                if (sim_inserted_keys.empty()) continue;
+                
+                KEY_TYPE key;
+                size_t attempts = 0;
+                const size_t max_attempts = 100000000;
+                do {
+                    std::uniform_int_distribution<size_t> dist(0, available_keys_vec.size() - 1);
+                    size_t idx = dist(gen);
+                    key = available_keys_vec[idx];
+                    attempts++;
+                } while (keys_to_delete.count(key) && attempts < max_attempts);
+                
+                if (keys_to_delete.count(key)) continue;
+                
+                keys_to_delete.insert(key);
+                sim_inserted_keys.erase(key);
+                sim_deleted_keys.insert(key);
+                temp_operations.emplace_back(DELETE, key);
+            }
+            
+            // Create a set of remaining keys (not marked for deletion)
+            std::unordered_set<KEY_TYPE> remaining_keys;
+            for (const auto& key : available_keys_vec) {
+                if (!keys_to_delete.count(key)) {
+                    remaining_keys.insert(key);
+                }
+            }
+            
+            // Convert remaining keys to vector for sampling
+            std::vector<KEY_TYPE> remaining_keys_vec(remaining_keys.begin(), remaining_keys.end());
+            
+            // Pre-generate sample keys using only available keys
+            KEY_TYPE* sample_ptr = nullptr;
+            if (sample_distribution == "uniform") {
+                sample_ptr = get_search_keys(remaining_keys_vec.data(), remaining_keys_vec.size(), 
+                                       remaining_keys_vec.size(), &random_seed);
+            } else if (sample_distribution == "zipf") {
+                sample_ptr = get_search_keys_zipf(remaining_keys_vec.data(), remaining_keys_vec.size(), 
+                                            remaining_keys_vec.size(), &random_seed);
+            }
+            
+            // Generate reads, updates, and scans (using existing keys)
+            for (size_t i = 0; i < read_count + update_count + scan_count; i++) {
+                if (remaining_keys_vec.empty() || sample_ptr == nullptr) continue;
+                
+                KEY_TYPE key;
+                size_t attempts = 0;
+                const size_t max_attempts = 10000000;
+                do {
+                    if (sim_sample_counter >= remaining_keys_vec.size()) sim_sample_counter = 0;
+                    key = sample_ptr[sim_sample_counter++];
+                    attempts++;
+                } while (sim_deleted_keys.count(key) && attempts < max_attempts);
+                
+                if (sim_deleted_keys.count(key)) continue;
+                
+                Operation op;
+                if (i < read_count) {
+                    op = READ;
+                } else if (i < read_count + update_count) {
+                    op = UPDATE;
+                } else {
+                    op = SCAN;
+                }
+                temp_operations.emplace_back(op, key);
+            }
+            
+            // Generate inserts (using new keys)
+            for (size_t i = 0; i < insert_count; i++) {
+                if (next_insert_pos >= table_size) continue;
+                KEY_TYPE key = keys[next_insert_pos++];
+                temp_operations.emplace_back(INSERT, key);
+                available_keys_vec.push_back(key);
+                sim_inserted_keys.insert(key);
+            }
+            
+            // Define the comparison function
+            auto operation_comp = [](const std::pair<Operation, KEY_TYPE>& a, 
+                                const std::pair<Operation, KEY_TYPE>& b) -> bool {
+                if (a.first == b.first) {
+                    return a.second < b.second;
+                }
+                return a.first < b.first;
+            };
+            
+            // Now handle the ordering based on the selected option
+            switch (operation_order) {
+                case ITERATE_SORT_UNSORTED:
+                    if (sim_current_batch_sorted) {
+                        std::sort(temp_operations.begin(), temp_operations.end(), operation_comp);
+                    } else {
+                        std::shuffle(temp_operations.begin(), temp_operations.end(), gen);
+                    }
+                    sim_current_batch_sorted = !sim_current_batch_sorted;
+                    break;
+                
+                case SHUFFLE_ALL:
+                    std::shuffle(temp_operations.begin(), temp_operations.end(), gen);
+                    break;
+                
+                case SHUFFLE_THEN_SORT:
+                    std::shuffle(temp_operations.begin(), temp_operations.end(), gen);
+                    std::sort(temp_operations.begin(), temp_operations.end(), operation_comp);
+                    break;
+            }
+            
+            // Copy to iteration operations
+            iter_operations = std::move(temp_operations);
+            
+            // Create a file to store operations for this iteration
+            std::string filename = std::string("operations_") + current_index_name + "_" + 
+                              std::to_string(sim_iteration_num) + ".txt";
+            std::ofstream ops_file(filename);
+            if (ops_file.is_open()) {
+                for (const auto& op : iter_operations) {
+                    std::string op_str;
+                    switch(op.first) {
+                        case READ: op_str = "READ"; break;
+                        case INSERT: op_str = "INSERT"; break;
+                        case UPDATE: op_str = "UPDATE"; break;
+                        case SCAN: op_str = "SCAN"; break;
+                        case DELETE: op_str = "DELETE"; break;
+                    }
+                    ops_file << op_str << " " << op.second << "\n";
+                }
+                ops_file.close();
+            }
+            
+            // Update simulated state for next iteration
+            sim_init_table_size = next_insert_pos;
+            if (sample_ptr) delete[] sample_ptr;
+            
+            // Verify operation counts
+            size_t actual_reads = std::count_if(iter_operations.begin(), iter_operations.end(),
+                [](const auto& op) { return op.first == READ; });
+            
+            COUT_THIS("Iteration " << sim_iteration_num << " generated operations: " << iter_operations.size());
+            COUT_THIS("Reads: " << actual_reads << "/" << read_count);
+            COUT_THIS("Inserts: " << insert_count);
+            COUT_THIS("Deletes: " << std::count_if(iter_operations.begin(), iter_operations.end(),
+                [](const auto& op) { return op.first == DELETE; }) << "/" << delete_count);
+            COUT_THIS("UPDATES: " << std::count_if(iter_operations.begin(), iter_operations.end(),
+                [](const auto& op) { return op.first == UPDATE; }) << "/" << update_count);
+            
+            std::string order_used;
+            switch (operation_order) {
+                case ITERATE_SORT_UNSORTED: 
+                    order_used = sim_current_batch_sorted ? "sorted" : "shuffled";
+                    break;
+                case SHUFFLE_ALL: 
+                    order_used = "shuffled";
+                    break;
+                case SHUFFLE_THEN_SORT: 
+                    order_used = "shuffled_then_sorted";
+                    break;
+            }
+            COUT_THIS("Operation order for iteration " << sim_iteration_num << ": " << order_used);
+            
+            // Update simulated init_keys for next iteration (like the original logic)
+            if (!sim_is_first_call) {
+                sim_init_keys.clear();
+                sim_init_keys.resize(sim_inserted_keys.size());
+                std::vector<KEY_TYPE> inserted_keys_vec(sim_inserted_keys.begin(), sim_inserted_keys.end());
+                for (size_t i = 0; i < sim_inserted_keys.size(); ++i) {
+                    sim_init_keys[i] = inserted_keys_vec[i];
+                }
+                tbb::parallel_sort(sim_init_keys.begin(), sim_init_keys.end());
+                sim_is_first_call = false;
+            }
+        }
+        
+        all_operations_generated = true;
+        COUT_THIS("Finished generating all operations for " << n_runs << " iterations");
+    }
+
+    // Function to get operations for a specific iteration
+    std::vector<std::pair<Operation, KEY_TYPE>>& get_operations_for_iteration(int iteration_index) {
+        if (!all_operations_generated) {
+            throw std::runtime_error("Operations not generated. Call generate_all_iterations_operations first.");
+        }
+        if (iteration_index < 0 || iteration_index >= static_cast<int>(all_iterations_operations.size())) {
+            std::stringstream ss;
+            ss << "Invalid iteration index " << iteration_index 
+               << ". Valid range: 0 to " << (all_iterations_operations.size() - 1)
+               << " (total iterations: " << all_iterations_operations.size() << ")";
+            throw std::runtime_error(ss.str());
+        }
+        return all_iterations_operations[iteration_index];
+    }
 };
