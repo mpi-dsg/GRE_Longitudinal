@@ -52,3 +52,6 @@
 [submodule "src/competitor/hyper/src"]
 	path = src/competitor/hyper/src
 	url = https://github.com/mpi-dsg/hyper-reimplementation.git
+[submodule "src/competitor/alex_rls/src"]
+	path = src/competitor/alex_rls/src
+	url = https://github.com/maqamylee0/ALEX_RLS
