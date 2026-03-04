@@ -13,6 +13,19 @@ find_package(TBB REQUIRED)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+    CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.0)
+    link_libraries(stdc++fs)
+endif()
+
+set(MKL_INCLUDE_DIRECTORY "${MKLROOT}/include")
+set(TBB_INCLUDE_DIRS "/home/GRE/oneTBB-2020.3/include")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mbmi -mbmi2 -mlzcnt -mavx2")
+set(TBB_LIBRARY_DIRS "/home/GRE/oneTBB-2020.3/build/linux_intel64_gcc_cc8.3.0_libc2.28_kernel6.1.92.1.amd64_release")
+set(TBB_LIBRARIES ${TBB_LIBRARY_DIRS}/libtbb.so ${TBB_LIBRARY_DIRS}/libtbbmalloc.so ${TBB_LIBRARY_DIRS}/libtbbmalloc_proxy.so)
+
+link_directories(${TBB_LIBRARY_DIRS})
+
 include_directories(${MKL_INCLUDE_DIRS})
 include_directories(${TBB_INCLUDE_DIRS})
 include_directories(${JEMALLOC_INCLUDE_DIR})
