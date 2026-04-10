@@ -1,8 +1,8 @@
 /*
  * The code is part of the XIndex project.
  *
- *    Copyright (C) 2020 Institute of Parallel and Distributed Systems (IPADS), Shanghai Jiao Tong University.
- *    All rights reserved.
+ *    Copyright (C) 2020 Institute of Parallel and Distributed Systems (IPADS),
+ * Shanghai Jiao Tong University. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,15 +31,15 @@
 #define COUT_THIS(this) std::cout << this << std::endl;
 #define COUT_VAR(this) std::cout << #this << ": " << this << std::endl;
 #define COUT_POS() COUT_THIS("at " << __FILE__ << ":" << __LINE__)
-#define COUT_N_EXIT(msg) \
-  COUT_THIS(msg);        \
-  COUT_POS();            \
+#define COUT_N_EXIT(msg)                                                       \
+  COUT_THIS(msg);                                                              \
+  COUT_POS();                                                                  \
   abort();
-#define INVARIANT(cond)            \
-  if (!(cond)) {                   \
-    COUT_THIS(#cond << " failed"); \
-    COUT_POS();                    \
-    abort();                       \
+#define INVARIANT(cond)                                                        \
+  if (!(cond)) {                                                               \
+    COUT_THIS(#cond << " failed");                                             \
+    COUT_POS();                                                                \
+    abort();                                                                   \
   }
 
 #if defined(NDEBUGGING)
@@ -57,15 +57,20 @@
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
+#ifndef MEMORY_FENCE
+#define MEMORY_FENCE
 inline void memory_fence() { asm volatile("mfence" : : : "memory"); }
+#endif
 
+#ifndef FENCE
+#define FENCE
 /** @brief Compiler fence.
  * Prevents reordering of loads and stores by the compiler. Not intended to
  * synchronize the processor's caches. */
 inline void fence() { asm volatile("" : : : "memory"); }
+#endif
 
-inline uint64_t cmpxchg(uint64_t *object, uint64_t expected,
-                               uint64_t desired) {
+inline uint64_t cmpxchg(uint64_t *object, uint64_t expected, uint64_t desired) {
   asm volatile("lock; cmpxchgq %2,%1"
                : "+a"(expected), "+m"(*object)
                : "r"(desired)
@@ -74,8 +79,7 @@ inline uint64_t cmpxchg(uint64_t *object, uint64_t expected,
   return expected;
 }
 
-inline uint8_t cmpxchgb(uint8_t *object, uint8_t expected,
-                               uint8_t desired) {
+inline uint8_t cmpxchgb(uint8_t *object, uint8_t expected, uint8_t desired) {
   asm volatile("lock; cmpxchgb %2,%1"
                : "+a"(expected), "+m"(*object)
                : "r"(desired)
@@ -84,4 +88,4 @@ inline uint8_t cmpxchgb(uint8_t *object, uint8_t expected,
   return expected;
 }
 
-#endif  // HELPER_H
+#endif // HELPER_H
