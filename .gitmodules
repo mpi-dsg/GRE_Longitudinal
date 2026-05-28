@@ -55,3 +55,6 @@
 [submodule "src/competitor/alex_rls/src"]
 	path = src/competitor/alex_rls/src
 	url = https://github.com/maqamylee0/ALEX_RLS
+[submodule "src/competitor/dytis/src"]
+	path = src/competitor/dytis/src
+	url = https://github.com/unist-ssl/DyTIS
