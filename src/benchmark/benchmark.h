@@ -34,7 +34,7 @@
 // --load_ops=<path> to replay a previously saved file instead of generating.
 
 template <typename KEY_TYPE, typename PAYLOAD_TYPE>
-class BenchmarkLongbench {
+class Benchmark {
 
   typedef indexInterface<KEY_TYPE, PAYLOAD_TYPE> index_t;
 
@@ -127,7 +127,7 @@ class BenchmarkLongbench {
   typedef ThreadParam param_t;
 
 public:
-  BenchmarkLongbench() {}
+  Benchmark() {}
 
   KEY_TYPE *load_keys() {
     COUT_THIS("Reading data from file.");
