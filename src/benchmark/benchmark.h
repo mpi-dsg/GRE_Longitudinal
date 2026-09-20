@@ -206,48 +206,78 @@ public:
     COUT_THIS("bulk load done");
   }
 
+  // Per-phase rebuild cost. Times the same work as before (no extra sorts);
+  // bulk_load_ns matches the old single-field rebuild_ns semantics.
+  struct RebuildTiming {
+    double snapshot_ns = 0;   // copy snapshot -> working vector
+    double sort_ns = 0;       // parallel_sort
+    double kv_ns = 0;         // materialize (key, payload) array
+    double bulk_load_ns = 0;  // index->bulk_load only
+    double total_ns = 0;      // sum of the four phases above
+  };
+
   // Discards *index and replaces it with a freshly bulk-loaded instance built
   // from `snapshot` (the active key set at a batch boundary). Returns the
-  // wall-clock rebuild time in nanoseconds so callers can log cost per key
-  // count. Uses local arrays only -- never touches init_keys/init_key_values,
-  // which are shared across every index_type's initial bulk load.
-  double rebuild_index(index_t *&index, const std::vector<KEY_TYPE> &snapshot) {
+  // per-phase wall-clock rebuild times in nanoseconds. Uses local arrays only
+  // -- never touches init_keys/init_key_values, which are shared across every
+  // index_type's initial bulk load.
+  RebuildTiming rebuild_index(index_t *&index,
+                              const std::vector<KEY_TYPE> &snapshot) {
+    RebuildTiming timing;
+    TSCNS tn;
+    tn.init();
+
+    auto a0 = tn.rdtsc();
     std::vector<KEY_TYPE> sorted_keys = snapshot;
+    auto a1 = tn.rdtsc();
+    timing.snapshot_ns = tn.tsc2ns(a1) - tn.tsc2ns(a0);
+
+    auto b0 = tn.rdtsc();
     tbb::parallel_sort(sorted_keys.begin(), sorted_keys.end());
+    auto b1 = tn.rdtsc();
+    timing.sort_ns = tn.tsc2ns(b1) - tn.tsc2ns(b0);
 
     auto *kv = new std::pair<KEY_TYPE, PAYLOAD_TYPE>[sorted_keys.size()];
+    auto c0 = tn.rdtsc();
     #pragma omp parallel for num_threads(thread_num)
     for (size_t i = 0; i < sorted_keys.size(); ++i)
       kv[i] = {sorted_keys[i], 123456789};
+    auto c1 = tn.rdtsc();
+    timing.kv_ns = tn.tsc2ns(c1) - tn.tsc2ns(c0);
 
     delete index;
     index = get_index<KEY_TYPE, PAYLOAD_TYPE>(index_type);
     Param param(thread_num, 0);
     index->init(&param);
 
-    TSCNS tn; tn.init();
-    auto t0 = tn.rdtsc();
+    auto d0 = tn.rdtsc();
     index->bulk_load(kv, sorted_keys.size(), &param);
-    auto t1 = tn.rdtsc();
+    auto d1 = tn.rdtsc();
+    timing.bulk_load_ns = tn.tsc2ns(d1) - tn.tsc2ns(d0);
 
     delete[] kv;
-    return tn.tsc2ns(t1) - tn.tsc2ns(t0);
+    timing.total_ns = timing.snapshot_ns + timing.sort_ns + timing.kv_ns +
+                      timing.bulk_load_ns;
+    return timing;
   }
 
-  void log_rebuild(size_t batch_index, size_t n_keys, double elapsed_ns) {
+  void log_rebuild(size_t batch_index, size_t n_keys,
+                   const RebuildTiming &timing) {
     if (rebuild_log_path.empty()) return;
 
     if (!file_exists(rebuild_log_path)) {
       std::ofstream h(rebuild_log_path, std::ios::app);
-      h << "timestamp,index_type,batch_index,n_keys,rebuild_ns\n";
+      h << "timestamp,index_type,batch_index,n_keys,"
+           "snapshot_ns,sort_ns,kv_ns,bulk_load_ns,total_ns\n";
     }
     std::time_t t = std::time(nullptr);
     char ts[32];
     std::strftime(ts, sizeof(ts), "%Y%m%d%H%M%S", std::localtime(&t));
 
     std::ofstream o(rebuild_log_path, std::ios::app);
-    o << ts << "," << index_type << "," << batch_index << ","
-      << n_keys << "," << elapsed_ns << "\n";
+    o << ts << "," << index_type << "," << batch_index << "," << n_keys << ","
+      << timing.snapshot_ns << "," << timing.sort_ns << "," << timing.kv_ns
+      << "," << timing.bulk_load_ns << "," << timing.total_ns << "\n";
   }
 
   inline void parse_args(int argc, char **argv) {
@@ -789,9 +819,13 @@ public:
         if (snap != rebuild_snapshots.end()) {
           COUT_THIS("  rebuilding after batch " << b+1
                     << " (" << snap->second.size() << " keys)...");
-          double ns = rebuild_index(index, snap->second);
-          COUT_THIS("  rebuild took " << ns / 1e6 << " ms");
-          log_rebuild(b, snap->second.size(), ns);
+          RebuildTiming timing = rebuild_index(index, snap->second);
+          COUT_THIS("  rebuild total " << timing.total_ns / 1e6 << " ms"
+                    << " (snapshot " << timing.snapshot_ns / 1e6
+                    << " / sort " << timing.sort_ns / 1e6
+                    << " / kv " << timing.kv_ns / 1e6
+                    << " / bulk " << timing.bulk_load_ns / 1e6 << ")");
+          log_rebuild(b, snap->second.size(), timing);
         }
       }
 
