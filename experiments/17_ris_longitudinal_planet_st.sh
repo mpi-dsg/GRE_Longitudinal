@@ -1,21 +1,22 @@
 #!/bin/bash
-# RIUD longitudinal WITHOUT --memory (avoids artunsync Tree::size segfault)
-# Indexes: lipp artunsync dili
+# RIS longitudinal: Read/Insert/Scan (no update, no delete)
+# Indexes: alex lipp  (ST_VALID_SCAN; hot excluded by request)
 # Dataset: planet
 # Seeds: 1866 5 72
-# Mix: R=0.30 I=0.40 U=0.20 D=0.10 S=0 -> B=7
+# Mix: R=0.40 I=0.40 S=0.20 U=0 D=0 -> B=7
+# memory OFF (stable CSV schema; OpCheck on console)
 set -uo pipefail
 ROOT=/home/GRE_Longitudinal
 cd "$ROOT"
 source experiments/common.sh planet
 
-INDEXES=(lipp artunsync dili)
+INDEXES=(alex lipp)
 SEEDS=(1866 5 72)
-READ=0.30
+READ=0.40
 INSERT=0.40
-UPDATE=0.20
-DELETE=0.10
-SCAN=0
+UPDATE=0
+DELETE=0
+SCAN=0.20
 INDEX_TIMEOUT_SEC=${INDEX_TIMEOUT_SEC:-1800}
 
 RESULTS_DIR="${RESULTS_DIR:-${ROOT}/results/longbench/longitudinal}"
@@ -23,12 +24,11 @@ LOG_DIR="${LOG_DIR:-${RESULTS_DIR}/logs}"
 OPS_CACHE_DIR="${OPS_CACHE_DIR:-${RESULTS_DIR}/ops_cache}"
 mkdir -p "$RESULTS_DIR" "$LOG_DIR" "$OPS_CACHE_DIR"
 
-MASTER_LOG="${LOG_DIR}/riud_nomem_planet_st_r30i40u20d10.log"
+MASTER_LOG="${LOG_DIR}/ris_planet_st_r40i40s20.log"
 : > "$MASTER_LOG"
 echo "======================================================================" | tee -a "$MASTER_LOG"
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) RIUD nomem START" | tee -a "$MASTER_LOG"
-echo "indexes=${INDEXES[*]} seeds=${SEEDS[*]} R/I/U/D=${READ}/${INSERT}/${UPDATE}/${DELETE}" | tee -a "$MASTER_LOG"
-echo "memory=OFF timeout=${INDEX_TIMEOUT_SEC}s" | tee -a "$MASTER_LOG"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) RIS START" | tee -a "$MASTER_LOG"
+echo "indexes=${INDEXES[*]} seeds=${SEEDS[*]} R/I/S=${READ}/${INSERT}/${SCAN} memory=OFF" | tee -a "$MASTER_LOG"
 echo "======================================================================" | tee -a "$MASTER_LOG"
 
 run_one() {
@@ -40,12 +40,12 @@ run_one() {
   {
     echo ""
     echo "======================================================================"
-    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)  ${idx}  R=${READ} I=${INSERT} U=${UPDATE} D=${DELETE} S=0 memory=OFF"
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)  ${idx}  R=${READ} I=${INSERT} U=0 D=0 S=${SCAN} memory=OFF"
     echo "======================================================================"
   } | tee -a "$log" "$MASTER_LOG"
 
   set +e
-  OMP_NUM_THREADS=1 timeout --signal=KILL "${INDEX_TIMEOUT_SEC}"     taskset -c 0 "$BIN"       --keys_file="${DATASET_PATH}" --keys_file_type=binary       --table_size="${TABLE_SIZE}" --init_table_ratio="${INIT_TABLE_RATIO}"       --operations_num="${OPERATIONS_NUM}"       --read="${READ}" --insert="${INSERT}" --update="${UPDATE}" --delete="${DELETE}" --scan=0       --scan_num="${SCAN_NUM}" --indexes="${idx}" --seed="${SEED}"       --operation_order="${OP_ORDER}" --thread_num=1       --output_path="${csv}"       --latency_sample       ${ops_flag} 2>&1 | tee -a "$log" "$MASTER_LOG"
+  OMP_NUM_THREADS=1 timeout --signal=KILL "${INDEX_TIMEOUT_SEC}"     taskset -c 0 "$BIN"       --keys_file="${DATASET_PATH}" --keys_file_type=binary       --table_size="${TABLE_SIZE}" --init_table_ratio="${INIT_TABLE_RATIO}"       --operations_num="${OPERATIONS_NUM}"       --read="${READ}" --insert="${INSERT}" --update=0 --delete=0 --scan="${SCAN}"       --scan_num="${SCAN_NUM}" --indexes="${idx}" --seed="${SEED}"       --operation_order="${OP_ORDER}" --thread_num=1       --output_path="${csv}"       --latency_sample       ${ops_flag} 2>&1 | tee -a "$log" "$MASTER_LOG"
   local rc=${PIPESTATUS[0]}
   set -e
   pkill -9 -f "--indexes=${idx} .*--output_path=${csv}" 2>/dev/null || true
@@ -55,8 +55,8 @@ run_one() {
 pass_count=0; fail_count=0; crash_count=0
 for seed in "${SEEDS[@]}"; do
   export SEED="$seed"
-  csv="${RESULTS_DIR}/riud_nomem_planet_st_r30i40u20d10_seed${seed}.csv"
-  ops_name="riud_nomem_planet_r30i40u20d10_seed${seed}"
+  csv="${RESULTS_DIR}/ris_planet_st_r40i40s20_seed${seed}.csv"
+  ops_name="ris_planet_r40i40s20_seed${seed}"
   rm -f "$csv"
   for idx in "${INDEXES[@]}"; do
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) START ${idx} seed=${seed}" | tee -a "$MASTER_LOG"
@@ -67,10 +67,13 @@ for seed in "${SEEDS[@]}"; do
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) CRASH ${idx} seed=${seed}" | tee -a "$MASTER_LOG"
       crash_count=$((crash_count+1)); continue
     fi
+    # For RIS: require read+insert exact; scans may have legitimate shortfalls near keyspace top
     fails=$(printf "%s" "$section" | grep -c "OpCheck ALL_OPS FAIL" || true)
     oks=$(printf "%s" "$section" | grep -c "OpCheck ALL_OPS OK" || true)
-    if [ "$fails" -gt 0 ] || [ "$oks" -eq 0 ]; then
-      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) FAIL_VALIDATE ${idx} seed=${seed} OK=${oks} FAIL=${fails}" | tee -a "$MASTER_LOG"
+    # Also flag if read/insert lines show FAIL even if ALL_OPS parsing differs
+    ri_fail=$(printf "%s" "$section" | grep -cE "OpCheck (read|insert).*FAIL" || true)
+    if [ "$fails" -gt 0 ] || [ "$ri_fail" -gt 0 ] || [ "$oks" -eq 0 ]; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) FAIL_VALIDATE ${idx} seed=${seed} OK=${oks} FAIL=${fails} RI_FAIL=${ri_fail}" | tee -a "$MASTER_LOG"
       fail_count=$((fail_count+1))
     else
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) PASS_VALIDATE ${idx} seed=${seed} batches_ok=${oks}" | tee -a "$MASTER_LOG"
@@ -78,5 +81,5 @@ for seed in "${SEEDS[@]}"; do
     fi
   done
 done
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) RIUD nomem DONE pass=${pass_count} fail=${fail_count} crash=${crash_count}" | tee -a "$MASTER_LOG"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) RIS DONE pass=${pass_count} fail=${fail_count} crash=${crash_count}" | tee -a "$MASTER_LOG"
 exit 0

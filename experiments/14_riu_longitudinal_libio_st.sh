@@ -21,7 +21,7 @@ UPDATE=0.20
 DELETE=0
 SCAN=0
 
-RESULTS_DIR="${RESULTS_DIR:-${ROOT}/experiments/results}"
+RESULTS_DIR="${RESULTS_DIR:-${ROOT}/results/longbench/longitudinal}"
 LOG_DIR="${LOG_DIR:-${RESULTS_DIR}/logs}"
 OPS_CACHE_DIR="${OPS_CACHE_DIR:-${RESULTS_DIR}/ops_cache}"
 mkdir -p "$RESULTS_DIR" "$LOG_DIR" "$OPS_CACHE_DIR"

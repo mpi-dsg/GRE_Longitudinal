@@ -33,8 +33,8 @@ DATASETS=(libio planet)
 
 INDEX_TIMEOUT_SEC=${INDEX_TIMEOUT_SEC:-14400}
 RESULTS_DIR=${RESULTS_DIR:-${ROOT}/results/longbench/longitudinal}
-LOG_DIR=${LOG_DIR:-${ROOT}/experiments/results/logs}
-OPS_CACHE_DIR=${OPS_CACHE_DIR:-${ROOT}/experiments/results/ops_cache}
+LOG_DIR=${LOG_DIR:-${ROOT}/results/logs}
+OPS_CACHE_DIR=${OPS_CACHE_DIR:-${ROOT}/results/ops_cache}
 mkdir -p "$RESULTS_DIR" "$LOG_DIR" "$OPS_CACHE_DIR"
 
 MASTER_LOG="${LOG_DIR}/rho_init_sweep_st.log"

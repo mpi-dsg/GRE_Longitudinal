@@ -18,7 +18,7 @@ DELETE=0.10
 SCAN=0
 INDEX_TIMEOUT_SEC=${INDEX_TIMEOUT_SEC:-1800}
 
-RESULTS_DIR="${RESULTS_DIR:-${ROOT}/experiments/results}"
+RESULTS_DIR="${RESULTS_DIR:-${ROOT}/results/longbench/longitudinal}"
 LOG_DIR="${LOG_DIR:-${RESULTS_DIR}/logs}"
 OPS_CACHE_DIR="${OPS_CACHE_DIR:-${RESULTS_DIR}/ops_cache}"
 mkdir -p "$RESULTS_DIR" "$LOG_DIR" "$OPS_CACHE_DIR"
