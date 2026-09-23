@@ -1,0 +1,49 @@
+--- alex_nodes.h
++++ alex_nodes.h
+@@ -31,7 +31,27 @@
+ #define ALEX_USE_LZCNT 1
+ 
+ namespace alexol {
++#include <random>
++#include <atomic>
++namespace alex_stagger {
++inline bool &enabled() { static bool e = false; return e; }
++inline double &delta() { static double d = 0.17; return d; }
++// One-sided: draw only capacity multipliers ABOVE 1/kInitDensity_, so no node is ever
++// born denser than kInitDensity_. A symmetric draw creates nodes at densities up to
++// 0.794, and a nearly-full gapped array makes every insert shift further while holding
++// the node lock -- which lengthens the critical section and costs far more under
++// concurrency than the waves it removes.
++inline bool &low_only() { static bool l = false; return l; }
++// Per-thread generator. A shared one needs a lock on every bulk_load, and bulk_load runs
++// on every node expansion.
++inline std::mt19937_64 &rng() {
++  static std::atomic<uint64_t> ctr{0};
++  thread_local std::mt19937_64 r(12345 + ctr.fetch_add(1, std::memory_order_relaxed));
++  return r;
++}
++}
+ 
++
+ // A parent class for both types of ALEX nodes
+ template <class T, class P> class AlexNode {
+ public:
+@@ -1268,7 +1288,17 @@
+   void bulk_load(const V values[], int num_keys,
+                  const LinearModel<T> *pretrained_model = nullptr,
+                  bool train_with_sample = false) {
+-    initialize(num_keys, kInitDensity_);
++    double init_density_ = kInitDensity_;
++    if (alex_stagger::enabled()) {
++      double base = 1.0 / kInitDensity_, d = alex_stagger::delta();
++      double lo = alex_stagger::low_only() ? base : base - d;
++      double hi = alex_stagger::low_only() ? base + 2.0 * d : base + d;
++      double m = std::uniform_real_distribution<double>(lo, hi)(alex_stagger::rng());
++      init_density_ = 1.0 / m;
++      if (max_slots_ > 0 && num_keys > 0)
++        init_density_ = std::max(init_density_, (double)num_keys / (double)max_slots_);
++    }
++    initialize(num_keys, init_density_);
+ 
+     if (num_keys == 0) {
+       expansion_threshold_ = data_capacity_;

@@ -1,0 +1,4 @@
+# Build artifacts only. results/ is deliberately tracked: the measurements are the point.
+_c/
+bench
+bench_ls*
