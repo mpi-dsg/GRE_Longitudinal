@@ -1,0 +1,867 @@
+# Side buffer and background expansion for ALEX-OL (paper Section 5), plus fixes to
+# released ALEX-OL that every configuration, including the baseline, is built with.
+#
+# Applies after alexol-stagger.patch and alexol-contention-stats.patch, in alexol/src:
+#   patch -p0 -d alexol/src -i alexol-sidebuf.patch
+#
+# Design, off by default, so an unflagged run behaves as ALEX-OL with the fixes below:
+#   sidebuf::enabled()  inserts and lookups proceed during a rebuild via a sealed side buffer
+#   bgexp::enabled()    inserts past a soft threshold enqueue the node for background threads
+# The bench driver sets them with the `side`, `bg`, `bgsoft=` and `bgthreads=` flags.
+#
+# Fixes to released ALEX-OL:
+#   - root expansion did not update existing children's local depth, so a later rebuild of
+#     such a child computed too many parent slots and overwrote its siblings, losing their
+#     subtrees (millions of keys under a small bulk load, also single-threaded);
+#   - root expansion mutated the live root in place (model shifted before the child array
+#     was swapped, array published before its new slots were filled) and freed the old
+#     array under lock-free readers; it now builds the new root privately, publishes it
+#     with one store, holds the root's and the outermost data node's locks, and retires
+#     rather than frees the old array;
+#   - a rebuild copied the leaf, including its depth, before locking the parent, so a root
+#     expansion in between left the replacement with a stale depth; it now takes the depth
+#     after the parent lock;
+#   - a lookup that misses checks the adjacent leaves, because a split and a lookup can
+#     disagree on which side of a boundary a 64-bit key falls (observed on SOSD osm).
+#
+# Also refactors the structural-modification body of Alex::insert into run_smo() unchanged,
+# so the background threads run the same code, and extends the contention counters with
+# restart attribution and slow-insert classification (enabled by `lockstats`).
+--- alex_nodes.h	2026-09-23 21:41:51
++++ alex_nodes.h	2026-09-24 14:01:30
+@@ -53,7 +53,36 @@
+   uint64_t validate_fail = 0;     // optimistic validation saw the version change
+   uint64_t read_denied = 0;       // model-node read lock refused
+   uint64_t write_denied = 0;      // write lock refused
++  // Restart attribution. An insert restarts whenever try_get_lock fails on its data node.
++  // The holder is either another insert (ordinary contention) or a structural
++  // modification (expansion, split, retrain), which holds the lock for its whole
++  // duration and leaves the old node locked and obsolete afterwards.
++  uint64_t retry_smo = 0;         // lock held by a structural modification
++  uint64_t retry_ins = 0;         // lock held by an ordinary insert
++  uint64_t fg_smo = 0;            // modifications run on an insert's own path
++  uint64_t bg_smo = 0;            // modifications run by the background expander
++  uint64_t bg_skip = 0;           // queued nodes already modified by a foreground insert
++  uint64_t smo_ns = 0;            // total time spent inside modifications
++  uint64_t smo_max_ns = 0;        // longest single modification
++  uint64_t side_ins = 0;          // inserts absorbed by a side buffer instead of restarting
++  uint64_t side_read = 0;         // lookups served from a node under rebuild
++  uint64_t side_full = 0;         // side buffer sealed or full; insert restarted
++  uint64_t smo_split = 0;         // modifications that split
++  uint64_t retry_noside = 0;      // restarts on a rebuild that had no side buffer open
++  uint64_t side_grow = 0;         // replacements grown while draining a side buffer
++  uint64_t split_ns = 0;          // time inside split modifications
++  // Inserts slower than 100us, by cause (first matching, in this order).
++  uint64_t slow_fgsmo = 0;        // the insert ran a structural modification itself
++  uint64_t slow_sealed = 0;       // restarted on a sealed or full side buffer
++  uint64_t slow_rsmo = 0;         // restarted on a node held by a modification (no buffer yet)
++  uint64_t slow_rins = 0;         // restarted on a node held by an ordinary insert
++  uint64_t slow_none = 0;         // none of the above: no restart, no modification
++  uint64_t root_expand = 0;       // root (key-domain) expansions performed
++  uint64_t boundary_hit = 0;      // lookups found only in a neighbor of the routed leaf
+ };
++// Per-insert trace, reset at the start of each insert when counting is enabled.
++struct InsertTrace { int smo = 0, sealed = 0, rsmo = 0, rins = 0; };
++inline InsertTrace &trace() { thread_local InsertTrace t; return t; }
+ inline std::mutex &reg_mtx() { static std::mutex m; return m; }
+ inline std::vector<Counters *> &registry() { static std::vector<Counters *> v; return v; }
+ inline bool &enabled() { static bool e = false; return e; }
+@@ -78,13 +107,66 @@
+     t.validate_fail += c->validate_fail;
+     t.read_denied += c->read_denied;
+     t.write_denied += c->write_denied;
++    t.retry_smo += c->retry_smo;
++    t.retry_ins += c->retry_ins;
++    t.fg_smo += c->fg_smo;
++    t.bg_smo += c->bg_smo;
++    t.bg_skip += c->bg_skip;
++    t.smo_ns += c->smo_ns;
++    if (c->smo_max_ns > t.smo_max_ns) t.smo_max_ns = c->smo_max_ns;
++    t.side_ins += c->side_ins;
++    t.side_read += c->side_read;
++    t.side_full += c->side_full;
++    t.smo_split += c->smo_split;
++    t.retry_noside += c->retry_noside;
++    t.side_grow += c->side_grow;
++    t.slow_fgsmo += c->slow_fgsmo;
++    t.slow_sealed += c->slow_sealed;
++    t.slow_rsmo += c->slow_rsmo;
++    t.slow_rins += c->slow_rins;
++    t.slow_none += c->slow_none;
++    t.root_expand += c->root_expand;
++    t.boundary_hit += c->boundary_hit;
++    t.split_ns += c->split_ns;
+   }
+   return t;
+ }
+ }  // namespace lock_stats
+ 
++// Background expansion. Every node of a bulk-loaded cohort reaches the expansion threshold
++// at the same insert count, and the insert that reaches it pays for the whole restructuring.
++// Here, an insert that takes a node past a lower "soft" threshold only enqueues it, and a
++// background thread performs the modification before the node reaches the hard threshold.
++// Detection stays synchronized; execution leaves the insert path and is serialized by the
++// queue, so at most one node per background thread is under modification at a time. If
++// the queue falls behind, the hard threshold still fires on the insert path as before.
++namespace bgexp {
++inline bool &enabled() { static bool e = false; return e; }
++// Soft threshold as a fraction of the hard one. 0.9375 = density 0.75 against 0.8.
++inline double &soft() { static double f = 0.9375; return f; }
++inline int &threads() { static int n = 1; return n; }
++// Set by the index when its background thread starts. The driver pauses the thread outside
++// timed regions: whole-structure walks such as memory accounting are not safe against a
++// concurrent rebuild, and untimed background work would flatter the design.
++inline std::function<void(bool)> &pause_hook() { static std::function<void(bool)> f; return f; }
++}  // namespace bgexp
++
++// Side buffer. While a node is being rebuilt, its holder keeps the lock for the whole
++// copy, and every insert or lookup that reaches the node restarts until the copy ends.
++// With the side buffer, the holder publishes a small buffer before it starts copying.
++// Inserts that find the node locked append to the buffer instead of restarting, and
++// lookups read the old node, which the rebuild only reads, plus the buffer. The holder
++// seals the buffer after copying, applies its entries to the new node, and publishes the
++// new node as before. Inserts that arrive after sealing restart as they do today; that
++// window covers only the apply and the parent update, not the copy.
++namespace sidebuf {
++inline bool &enabled() { static bool e = false; return e; }
++constexpr int kCap = 1024;
++}  // namespace sidebuf
++
+ #include <random>
+ #include <atomic>
++#include <functional>
+ namespace alex_stagger {
+ inline bool &enabled() { static bool e = false; return e; }
+ inline double &delta() { static double d = 0.17; return d; }
+@@ -449,6 +531,26 @@
+                                               // determines the contraction
+                                               // threshold
+   double expansion_threshold_ = 1; // expand after m_num_keys is >= this number
++  bool bg_queued_ = false; // already handed to the background expander
++  bool smo_ = false;       // lock is held (or was last held) by a structural modification
++  struct SideBuf {
++    uint32_t spin = 0;
++    bool sealed = false;
++    int n = 0;
++    T k[sidebuf::kCap];
++    P v[sidebuf::kCap];
++    void lock() {
++      while (__atomic_exchange_n(&spin, 1u, __ATOMIC_ACQUIRE)) {
++        while (__atomic_load_n(&spin, __ATOMIC_RELAXED)) {
++#if defined(__x86_64__) || defined(__i386__)
++          __builtin_ia32_pause();
++#endif
++        }
++      }
++    }
++    void unlock() { __atomic_store_n(&spin, 0u, __ATOMIC_RELEASE); }
++  };
++  SideBuf *side_ = nullptr; // set by the rebuild holder; freed with the node
+   double contraction_threshold_ =
+       0; // contract after m_num_keys is < this number
+   static constexpr int kDefaultMaxDataNodeBytes_ =
+@@ -501,6 +603,8 @@
+         max_slots_(max_data_node_slots) {}
+ 
+   ~AlexDataNode() {
++    delete side_;
++    side_ = nullptr;
+ #if ALEX_DATA_NODE_SEP_ARRAYS
+     if (key_slots_ == nullptr) {
+       return;
+@@ -782,6 +886,9 @@
+     auto node_ptr = reinterpret_cast<self_type *>(*ptr);
+     memcpy(node_ptr, old_node, sizeof(self_type));
+     node_ptr->link_lock_ = 0;
++    node_ptr->bg_queued_ = false;
++    node_ptr->smo_ = false;
++    node_ptr->side_ = nullptr;
+     node_ptr->key_slots_ = nullptr;
+     node_ptr->payload_slots_ = nullptr;
+   }
+@@ -1669,8 +1776,25 @@
+   bool find_payload(const T &key, P *payload, bool *found) {
+     uint32_t version;
+     if (test_lock_set(
+-            version)) // Test whether the lock is set and record the version
+-      return false;
++            version)) { // Test whether the lock is set and record the version
++      SideBuf *sb = __atomic_load_n(&side_, __ATOMIC_ACQUIRE);
++      if (sb == nullptr) return false;
++      // A rebuild holds the lock and only reads this node, so its arrays are stable.
++      if (lock_stats::enabled()) lock_stats::local().side_read++;
++      int pos = exponential_search_upper_bound_ro(predict_position(key), key) - 1;
++      if (!(pos < 0 || !key_equal(ALEX_DATA_NODE_KEY_AT(pos), key))) {
++        *payload = get_payload(pos);
++        *found = true;
++        return true;
++      }
++      *found = false;
++      sb->lock();
++      for (int i = 0; i < sb->n; i++) {
++        if (key_equal(sb->k[i], key)) { *payload = sb->v[i]; *found = true; break; }
++      }
++      sb->unlock();
++      return true;
++    }
+     num_lookups_++;
+     int predicted_pos = predict_position(key);
+     // The last key slot with a certain value is guaranteed to be a real key
+@@ -1821,6 +1945,26 @@
+     return binary_search_upper_bound(l, r, key);
+   }
+ 
++  // Same search without the statistics counter. The side-buffer paths search an old node
++  // concurrently from several threads, so they must not write to it at all.
++  template <class K>
++  inline int exponential_search_upper_bound_ro(int m, const K &key) const {
++    int bound = 1;
++    int l, r;
++    if (key_greater(ALEX_DATA_NODE_KEY_AT(m), key)) {
++      int size = m;
++      while (bound < size && key_greater(ALEX_DATA_NODE_KEY_AT(m - bound), key)) bound *= 2;
++      l = m - std::min<int>(bound, size);
++      r = m - bound / 2;
++    } else {
++      int size = data_capacity_ - m;
++      while (bound < size && key_lessequal(ALEX_DATA_NODE_KEY_AT(m + bound), key)) bound *= 2;
++      l = m + bound / 2;
++      r = m + std::min<int>(bound, size);
++    }
++    return binary_search_upper_bound(l, r, key);
++  }
++
+   // Searches for the first position greater than key in range [l, r)
+   // https://stackoverflow.com/questions/6443569/implementation-of-c-lower-bound
+   // Returns position in range [l, r]
+@@ -1956,7 +2100,26 @@
+     // Try to get the exclusive lock
+     uint32_t lock_version;
+     if (!try_get_lock()) {
+-      return {4, -1};
++      SideBuf *sb = __atomic_load_n(&side_, __ATOMIC_ACQUIRE);
++      if (sb == nullptr) return {4, -1};
++      int pos = exponential_search_upper_bound_ro(predict_position(key), key) - 1;
++      if (!allow_duplicates && pos >= 0 && key_equal(ALEX_DATA_NODE_KEY_AT(pos), key))
++        return {-1, pos};
++      sb->lock();
++      if (sb->sealed || sb->n == sidebuf::kCap) {
++        sb->unlock();
++        if (lock_stats::enabled()) { lock_stats::local().side_full++; lock_stats::trace().sealed++; }
++        return {4, -1};
++      }
++      for (int i = 0; !allow_duplicates && i < sb->n; i++) {
++        if (key_equal(sb->k[i], key)) { sb->unlock(); return {-1, -1}; }
++      }
++      sb->k[sb->n] = key;
++      sb->v[sb->n] = payload;
++      sb->n++;
++      sb->unlock();
++      if (lock_stats::enabled()) lock_stats::local().side_ins++;
++      return {0, -1};
+     }
+ 
+     // Insert
+@@ -1991,11 +2154,13 @@
+ 
+     // Periodically check for catastrophe
+     if (num_inserts_ % 64 == 0 && catastrophic_cost()) {
++      __atomic_store_n(&smo_, true, __ATOMIC_RELAXED);
+       return {2, -1};
+     }
+ 
+     // Check if node is full (based on expansion_threshold)
+     if (num_keys_ >= expansion_threshold_) {
++      __atomic_store_n(&smo_, true, __ATOMIC_RELAXED);
+       if (significant_cost_deviation()) {
+         return {1, -1};
+       }
+@@ -2013,10 +2178,70 @@
+       return {5, -1};
+     }
+ 
++    if (bgexp::enabled() && !bg_queued_ &&
++        num_keys_ >= bgexp::soft() * expansion_threshold_) {
++      bg_queued_ = true;
++      release_lock();
++      return {6, insertion_position}; // inserted; caller enqueues the node
++    }
++
+     release_lock(); // release lock & return
+     return {0, insertion_position};
+   }
+ 
++  // The modification the insert path would choose for this node, for the background
++  // expander, which runs it before the hard threshold. Caller holds the lock.
++  int bg_smo_code() const {
++    if (significant_cost_deviation()) return 1;
++    if (catastrophic_cost()) return 2;
++    if (num_keys_ > max_slots_ * kMinDensity_) return 3;
++    return 5;
++  }
++  bool bg_due() const { return num_keys_ >= bgexp::soft() * expansion_threshold_; }
++
++  // Rebuild protocol, called by the lock holder. open_side before copying from this node,
++  // then seal_side and drain into the replacement before publishing it.
++  SideBuf *open_side() {
++    if (!sidebuf::enabled()) return nullptr;
++    auto *sb = new SideBuf;
++    __atomic_store_n(&side_, sb, __ATOMIC_RELEASE);
++    return sb;
++  }
++  static void seal_and_drain(SideBuf *sb, self_type *dst) {
++    if (sb == nullptr) return;
++    sb->lock();
++    sb->sealed = true;
++    sb->unlock();
++    for (int i = 0; i < sb->n; i++) dst->insert_nolock(sb->k[i], sb->v[i]);
++  }
++  // Insert into a node no other thread can see yet (the replacement under construction).
++  void insert_nolock(const T &key, const P &payload) {
++    // The replacement is still private, so it can be grown freely. ALEX's own insert path
++    // assumes a node always has a free slot: it inserts first and expands afterwards. A split
++    // child or a small replacement is sized for the keys it was built from, not for drained
++    // entries, so keep at least one free slot before and after every drained insert.
++    auto grow = [this] {
++      double target = std::min<double>(kMinDensity_, num_keys_ / (num_keys_ + 3.5));
++      resize(target, false, false, false);
++      if (lock_stats::enabled()) lock_stats::local().side_grow++;
++    };
++    if (num_keys_ > 0 && num_keys_ + 1 > data_capacity_ - 1) grow();
++    std::pair<int, int> positions = find_insert_position(key);
++    int insertion_position = positions.first;
++    if (insertion_position < data_capacity_ && !check_exists(insertion_position)) {
++      insert_element_at(key, payload, insertion_position);
++    } else {
++      insert_using_shifts(key, payload, insertion_position);
++    }
++    num_keys_++;
++    num_inserts_++;
++    if (key > max_key_) { max_key_ = key; num_right_out_of_bounds_inserts_++; }
++    if (key < min_key_) { min_key_ = key; num_left_out_of_bounds_inserts_++; }
++    if (num_keys_ + 1 >= data_capacity_ || num_keys_ >= expansion_threshold_) grow();
++    // ALEX's insert path needs a free slot in any node it can reach.
++    assert(num_keys_ < data_capacity_);
++  }
++
+   // Resize the data node to the target density
+   void resize(double target_density, bool force_retrain = false,
+               bool keep_left = false, bool keep_right = false) {
+--- alex.h	2026-09-23 21:41:51
++++ alex.h	2026-09-24 15:51:37
+@@ -39,6 +39,11 @@
+ #include <stack>
+ #include <type_traits>
+ #include <vector>
++#include <chrono>
++#include <condition_variable>
++#include <deque>
++#include <mutex>
++#include <thread>
+ 
+ #include "alex_base.h"
+ #include "alex_fanout_tree.h"
+@@ -409,6 +414,7 @@
+   }
+ 
+   ~Alex() {
++    bg_shutdown();
+     for (NodeIterator node_it = NodeIterator(this); !node_it.is_end();
+          node_it.next()) {
+       delete_node(node_it.current());
+@@ -1329,8 +1335,26 @@
+       data_node_type *leaf = get_leaf(key);
+       bool found = false;
+       auto ret_flag = leaf->find_payload(key, payload, &found);
+-      if (ret_flag == true)
+-        return found; // ret_flag == true means no concurrency conlict occurs
++      if (ret_flag != true) continue; // concurrency conflict: restart
++      if (found) return true;
++      // A split partitions keys by comparing (double)key with a midpoint, while lookups
++      // route by evaluating the parent's model, a * (double)key + b. For 64-bit keys the two
++      // can disagree for a key whose double value lies on the boundary, which then sits in
++      // the neighbor of the leaf it routes to and cannot be found (observed on SOSD osm).
++      // On a miss, check the adjacent leaves. Hits are unaffected.
++      bool retry = false;
++      for (data_node_type *nb : {leaf->next_leaf_, leaf->prev_leaf_}) {
++        if (nb == nullptr) continue;
++        bool f2 = false;
++        P p2;
++        if (!nb->find_payload(key, &p2, &f2)) { retry = true; break; }
++        if (f2) {
++          if (lock_stats::enabled()) lock_stats::local().boundary_hit++;
++          *payload = p2;
++          return true;
++        }
++      }
++      if (!retry) return false;
+     } while (true);
+   }
+ 
+@@ -1753,6 +1777,25 @@
+   // Insert does not happen if duplicates are not allowed and duplicate is
+   // found.
+   bool insert(const T &key, const P &payload) {
++    if (!lock_stats::enabled()) return insert_impl(key, payload);
++    auto &tr = lock_stats::trace();
++    tr = lock_stats::InsertTrace{};
++    auto t0 = std::chrono::steady_clock::now();
++    bool r = insert_impl(key, payload);
++    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
++                  std::chrono::steady_clock::now() - t0).count();
++    if (ns > 100000) {
++      auto &c = lock_stats::local();
++      if (tr.smo) c.slow_fgsmo++;
++      else if (tr.sealed) c.slow_sealed++;
++      else if (tr.rsmo) c.slow_rsmo++;
++      else if (tr.rins) c.slow_rins++;
++      else c.slow_none++;
++    }
++    return r;
++  }
++
++  bool insert_impl(const T &key, const P &payload) {
+     EpochGuard guard;
+   RETRY:
+     // If enough keys fall outside the key domain, expand the root to expand the
+@@ -1784,6 +1827,10 @@
+     std::pair<int, int> ret = leaf->insert(key, payload);
+     int fail = ret.first;
+     int insert_pos = ret.second;
++    if (fail == 6) {
++      bg_push(key);
++      fail = 0;
++    }
+ 
+     // If no insert, figure out what to do with the data node to decrease the
+     // cost
+@@ -1794,13 +1841,63 @@
+       }
+ 
+       if (fail == 4) {
+-        { if (lock_stats::enabled()) lock_stats::local().retry++; goto RETRY; }
++        if (lock_stats::enabled()) {
++          auto &c = lock_stats::local();
++          c.retry++;
++          if (__atomic_load_n(&leaf->smo_, __ATOMIC_RELAXED) || leaf->is_obsolete_)
++          {
++            c.retry_smo++;
++            lock_stats::trace().rsmo++;
++            if (__atomic_load_n(&leaf->side_, __ATOMIC_RELAXED) == nullptr) c.retry_noside++;
++          }
++          else {
++            c.retry_ins++;
++            lock_stats::trace().rins++;
++          }
++        }
++        goto RETRY;
+       }
+ 
++      if (lock_stats::enabled()) { lock_stats::local().fg_smo++; lock_stats::trace().smo++; }
++      run_smo(leaf, fail, key);
++      if (fail == 5) return true;
++    }
++    // stats_.num_inserts++;
++    // stats_.num_keys++;
++    thread_local int insert_counter(0);
++    insert_counter = (insert_counter + 1) & counterMask;
++    if (insert_counter == 0) {
++      ADD(&stats_.num_keys, (1 << 19));
++    }
++    return true;
++  }
++
++  // Structural modification of a locked leaf, chosen by fail code (1, 2, 3 or 5).
++  // Factored out of insert() unchanged so the background expander runs the same code.
++  void run_smo(data_node_type *leaf, int fail, const T &key) {
++    auto smo_t0 = std::chrono::steady_clock::now();
++    run_smo_body(leaf, fail, key);
++    if (lock_stats::enabled()) {
++      auto ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
++                    std::chrono::steady_clock::now() - smo_t0).count();
++      auto &c = lock_stats::local();
++      c.smo_ns += ns;
++      if (ns > c.smo_max_ns) c.smo_max_ns = ns;
++      if (fail != 5 && __atomic_load_n(&leaf->side_, __ATOMIC_RELAXED) == nullptr) c.split_ns += ns;
++    }
++  }
++
++  void run_smo_body(data_node_type *leaf, int fail, const T &key) {
++    // Open the side buffer before any work, so inserts and lookups that reach this node
++    // during the fanout decision, the copy or the split do not restart.
++    leaf->open_side();
++    {
++
+       if (fail == 5) { // Data node resizing
+         // std::cout << "DN expansion with node scaling, key = " << key <<
+         // std::endl;
+         // 1. Allocate new node
++        auto *side = leaf->side_;
+         data_node_type *node;
+         data_node_type::New_from_existing(reinterpret_cast<void **>(&node),
+                                           leaf);
+@@ -1810,6 +1907,7 @@
+         bool keep_right = leaf->is_append_mostly_left();
+         node->resize_from_existing(leaf, data_node_type::kMinDensity_, false,
+                                    keep_left, keep_right);
++        data_node_type::seal_and_drain(side, node);
+ 
+         // 3. Update parent node
+         std::vector<TraversalNode> traversal_path;
+@@ -1819,6 +1917,9 @@
+ 
+         model_node_type *parent = traversal_path.back().node;
+         int bucketID = traversal_path.back().bucketID;
++        // The replacement copied the leaf before the parent lock was taken; a root expansion in
++        // between raises the leaf's depth, so take the depth now that it is stable.
++        node->local_depth_ = leaf->local_depth_;
+         int repeats =
+             1 << (log_2_round_down(parent->num_children_) - leaf->local_depth_);
+         int start_bucketID =
+@@ -1838,7 +1939,7 @@
+         release_link_locks_for_resizing(node);
+ 
+         safe_delete_node(leaf);
+-        return true;
++        return;
+       }
+ 
+       std::vector<fanout_tree::FTNode> used_fanout_tree_nodes;
+@@ -1863,6 +1964,7 @@
+         // std::cout << "DN expansion with node retraining, key = " << key <<
+         // std::endl;
+         // 1. Allocate new node
++        auto *side = leaf->side_;
+         data_node_type *node;
+         data_node_type::New_from_existing(reinterpret_cast<void **>(&node),
+                                           leaf);
+@@ -1872,6 +1974,7 @@
+         bool keep_right = leaf->is_append_mostly_left();
+         node->resize_from_existing(leaf, data_node_type::kMinDensity_, true,
+                                    keep_left, keep_right);
++        data_node_type::seal_and_drain(side, node);
+ 
+         fanout_tree::FTNode &tree_node = used_fanout_tree_nodes[0];
+         leaf->cost_ = tree_node.cost;
+@@ -1888,6 +1991,9 @@
+ 
+         model_node_type *parent = traversal_path.back().node;
+         int bucketID = traversal_path.back().bucketID;
++        // The replacement copied the leaf before the parent lock was taken; a root expansion in
++        // between raises the leaf's depth, so take the depth now that it is stable.
++        node->local_depth_ = leaf->local_depth_;
+         int repeats =
+             1 << (log_2_round_down(parent->num_children_) - leaf->local_depth_);
+         int start_bucketID =
+@@ -1911,6 +2017,7 @@
+         // std::cout << "DN split with node retraining, key = " << key <<
+         // std::endl; split data node: always try to split sideways/upwards,
+         // only split downwards if necessary
++        if (lock_stats::enabled()) lock_stats::local().smo_split++;
+         bool reuse_model = (fail == 3);
+         if (experimental_params_.allow_splitting_upwards) {
+           // allow splitting upwards
+@@ -1923,14 +2030,135 @@
+         }
+       }
+     }
+-    // stats_.num_inserts++;
+-    // stats_.num_keys++;
+-    thread_local int insert_counter(0);
+-    insert_counter = (insert_counter + 1) & counterMask;
+-    if (insert_counter == 0) {
+-      ADD(&stats_.num_keys, (1 << 19));
++  }
++
++  // Seal the old node's side buffer and route each entry to the new child whose key
++  // range holds it. Called once the children's limits are final and before any of them
++  // is published, so every entry is visible from the moment the children are.
++  void drain_side_split(data_node_type *leaf,
++                        std::vector<fanout_tree::FTNode> &ftn,
++                        data_node_type *l, data_node_type *r) {
++    auto *sb = leaf->side_;
++    if (sb == nullptr) return;
++    sb->lock();
++    sb->sealed = true;
++    sb->unlock();
++    for (int i = 0; i < sb->n; i++) {
++      const T &k = sb->k[i];
++      data_node_type *dst = r;
++      if (ftn.empty()) {
++        if (k < l->max_limit_) dst = l;
++      } else {
++        for (auto &tn : ftn) {
++          auto *c = reinterpret_cast<data_node_type *>(tn.data_node);
++          if (k < c->max_limit_) { dst = c; break; }
++        }
++      }
++      dst->insert_nolock(k, sb->v[i]);
+     }
+-    return true;
++  }
++
++  // ---- background expansion (see bgexp in alex_nodes.h) ----
++  struct BgState {
++    std::mutex mu;
++    std::condition_variable cv;
++    std::deque<T> q;
++    bool paused = false;          // guarded by mu
++    bool stop = false;            // guarded by mu; set by the destructor
++    std::atomic<int> busy{0};     // rebuilds in flight; incremented under mu
++    std::vector<std::thread> threads;
++  };
++
++  // Stop and join the background threads before the index is torn down. They capture
++  // `this`, so they must not outlive it.
++  void bg_shutdown() {
++    if (bg_ == nullptr) return;
++    {
++      std::lock_guard<std::mutex> g(bg_->mu);
++      bg_->stop = true;
++    }
++    bg_->cv.notify_all();
++    for (auto &t : bg_->threads) if (t.joinable()) t.join();
++    bgexp::pause_hook() = nullptr;
++    delete bg_;
++    bg_ = nullptr;
++  }
++
++  // Stop the background thread from starting new rebuilds and wait for the one in flight.
++  // Setting `paused` and taking work both happen under mu, so after the lock is released
++  // either the thread has already counted itself busy or it will see the flag.
++  void bg_pause() {
++    if (bg_ == nullptr) return;
++    {
++      std::lock_guard<std::mutex> g(bg_->mu);
++      bg_->paused = true;
++    }
++    while (bg_->busy.load(std::memory_order_acquire) != 0) std::this_thread::yield();
++  }
++  void bg_resume() {
++    if (bg_ == nullptr) return;
++    {
++      std::lock_guard<std::mutex> g(bg_->mu);
++      bg_->paused = false;
++    }
++    bg_->cv.notify_all();
++  }
++  BgState *bg_ = nullptr;
++  std::once_flag bg_once_;
++
++  void bg_push(const T &key) {
++    std::call_once(bg_once_, [this] {
++      bg_ = new BgState;
++      bgexp::pause_hook() = [this](bool p) { p ? bg_pause() : bg_resume(); };
++      for (int i = 0; i < bgexp::threads(); i++)
++        bg_->threads.emplace_back([this] { bg_loop(); });
++    });
++    {
++      std::lock_guard<std::mutex> g(bg_->mu);
++      bg_->q.push_back(key);
++    }
++    bg_->cv.notify_one();
++  }
++
++  void bg_loop() {
++    for (;;) {
++      T k;
++      {
++        std::unique_lock<std::mutex> l(bg_->mu);
++        bg_->cv.wait(l, [this] { return bg_->stop || (!bg_->q.empty() && !bg_->paused); });
++        if (bg_->stop) return;
++        k = bg_->q.front();
++        bg_->q.pop_front();
++        bg_->busy.fetch_add(1, std::memory_order_acq_rel);
++      }
++      bg_expand(k);
++      bg_->busy.fetch_sub(1, std::memory_order_acq_rel);
++    }
++  }
++
++  // Modify the node that now holds k, if it is still past the soft threshold. A node
++  // that a foreground insert already modified has been replaced by one at density 0.6
++  // and is skipped.
++  void bg_expand(const T &k) {
++    EpochGuard guard;
++    for (;;) {
++      data_node_type *leaf = get_leaf(k);
++      // get_leaf returns null when a neighbor link changes during its boundary correction.
++      if (leaf == nullptr || !leaf->try_get_lock()) {
++        std::this_thread::yield();
++        continue;
++      }
++      if (leaf->is_obsolete_ || !leaf->bg_due()) {
++        leaf->release_lock();
++        if (lock_stats::enabled()) lock_stats::local().bg_skip++;
++        return;
++      }
++      int code = leaf->bg_smo_code();
++      __atomic_store_n(&leaf->smo_, true, __ATOMIC_RELAXED);
++      if (lock_stats::enabled()) lock_stats::local().bg_smo++;
++      run_smo(leaf, code, k);
++      return;
++    }
+   }
+ 
+   void create_two_new_data_nodes_without_parent(data_node_type *old_node,
+@@ -2118,6 +2346,7 @@
+         }
+       }
+ 
++      drain_side_split(leaf, used_fanout_tree_nodes, left_leaf, right_leaf);
+       new_node->get_read_lock();
+ 
+       // update the pointers in parent
+@@ -2226,6 +2455,7 @@
+         right_leaf->min_limit_ = left_leaf->max_limit_;
+         right_leaf->max_limit_ =
+             (end_bucketID - parent->model_.b_) / parent->model_.a_;
++        drain_side_split(leaf, used_fanout_tree_nodes, left_leaf, right_leaf);
+ 
+         for (int i = start_bucketID; i < mid_bucketID; i++) {
+           parent->children_[i] = left_leaf;
+@@ -2259,6 +2489,7 @@
+           }
+           right_leaf = child_node;
+         }
++        drain_side_split(leaf, used_fanout_tree_nodes, left_leaf, right_leaf);
+ 
+         cur = start_bucketID;
+         for (fanout_tree::FTNode &tree_node : used_fanout_tree_nodes) {
+@@ -2393,8 +2624,23 @@
+   // If the root node is at the max node size, then we split the root and create
+   // a new root node.
+   void expand_root(T key, bool expand_left) {
+-    std::cout << "Expanding the root" << std::endl;
++    // The expansion moves keys out of the outermost data node and rewrites its links, so it
++    // must hold that node's lock. Released ALEX-OL takes no lock here, which races with
++    // ordinary inserts and with lookups served from a side buffer during a rebuild. If the
++    // node is busy, skip: root expansion is opportunistic and the next insert retries it.
++    data_node_type *locked_outermost =
++        expand_left ? first_data_node() : last_data_node();
++    if (!locked_outermost->try_get_lock()) return;
++    // The expansion rewrites the root's child array and the children's depths. Structural
++    // modifications publish into the root under its read lock, so hold its write lock (or
++    // skip, for the same reason as above).
+     auto root = static_cast<model_node_type *>(root_node_);
++    model_node_type *locked_root = root;
++    if (!locked_root->try_get_write_lock()) {
++      locked_outermost->release_lock();
++      return;
++    }
++    if (lock_stats::enabled()) lock_stats::local().root_expand++;
+ 
+     // Find the new bounds of the key domain.
+     // Need to be careful to avoid overflows in the key type.
+@@ -2422,7 +2668,7 @@
+       }
+       istats_.num_keys_at_last_left_domain_resize = stats_.num_keys;
+       istats_.num_keys_below_key_domain = 0;
+-      outermost_node = first_data_node();
++      outermost_node = locked_outermost;
+     } else {
+       auto key_difference = static_cast<double>(std::max(key, get_max_key()) -
+                                                 istats_.key_domain_max_);
+@@ -2442,11 +2688,16 @@
+       }
+       istats_.num_keys_at_last_right_domain_resize = stats_.num_keys;
+       istats_.num_keys_above_key_domain = 0;
+-      outermost_node = last_data_node();
++      outermost_node = locked_outermost;
+     }
+     assert(expansion_factor > 1);
+ 
+-    // Modify the root node appropriately
++    // Build the expanded root privately and publish it with one pointer store at the end, so
++    // a lock-free lookup sees either the old root or the complete new one. Released ALEX-OL
++    // mutates the live root in place: it shifts the model before swapping the child array and
++    // publishes the array before filling its new slots, so concurrent lookups and inserts can
++    // follow the wrong or an uninitialized pointer.
++    model_node_type *replaced_root = nullptr;
+     int new_nodes_start; // index of first pointer to a new node
+     int new_nodes_end;   // exclusive
+     if (static_cast<size_t>(root->num_children_) * expansion_factor <=
+@@ -2458,12 +2709,17 @@
+       int new_num_children = root->num_children_ * expansion_factor;
+       auto new_children = new (pointer_allocator().allocate(new_num_children))
+           AlexNode<T, P> *[new_num_children];
++      auto grown = new (model_node_allocator().allocate(1))
++          model_node_type(root->level_, allocator_);
++      grown->model_ = root->model_;
++      grown->local_depth_ = root->local_depth_;
++      grown->cost_ = root->cost_;
+       int copy_start;
+       if (expand_left) {
+         copy_start = new_num_children - root->num_children_;
+         new_nodes_start = 0;
+         new_nodes_end = copy_start;
+-        root->model_.b_ += new_num_children - root->num_children_;
++        grown->model_.b_ += new_num_children - root->num_children_;
+       } else {
+         copy_start = 0;
+         new_nodes_start = root->num_children_;
+@@ -2472,9 +2728,21 @@
+       for (int i = 0; i < root->num_children_; i++) {
+         new_children[copy_start + i] = root->children_[i];
+       }
+-      pointer_allocator().deallocate(root->children_, root->num_children_);
+-      root->children_ = new_children;
+-      root->num_children_ = new_num_children;
++      // Each existing child keeps its slots but the root now has expansion_factor times as
++      // many, so its depth relative to the root grows by log2(expansion_factor). Released
++      // ALEX-OL omits this, and a later rebuild of such a child computes too many slots and
++      // overwrites its siblings, losing their subtrees.
++      {
++        int lg = log_2_round_down(expansion_factor);
++        for (int i = 0; i < root->num_children_; i++)
++          if (i == 0 || root->children_[i] != root->children_[i - 1])
++            root->children_[i]->local_depth_ += lg;
++      }
++      grown->children_ = new_children;
++      grown->num_children_ = new_num_children;
++      // The old root and its child array stay allocated: lock-free lookups may still hold them.
++      replaced_root = root;
++      root = grown;
+     } else {
+       // Create new root node
+       auto new_root = new (model_node_allocator().allocate(1))
+@@ -2494,9 +2762,9 @@
+         new_root->children_[0] = root;
+         new_nodes_start = 1;
+       }
++      // The old root occupies one of expansion_factor slots (released ALEX-OL omits this).
++      root->local_depth_ = log_2_round_down(expansion_factor);
+       new_nodes_end = new_nodes_start + expansion_factor - 1;
+-      root_node_ = new_root;
+-      update_superroot_pointer();
+       root = new_root;
+     }
+     // Determine if new nodes represent a range outside the key type's domain.
+@@ -2601,6 +2869,17 @@
+ 
+     istats_.key_domain_min_ = new_domain_min;
+     istats_.key_domain_max_ = new_domain_max;
++    // Publish the fully built root.
++    std::atomic_thread_fence(std::memory_order_release);
++    root_node_ = root;
++    update_superroot_pointer();
++    if (replaced_root != nullptr) {
++      // Retired: stays write-locked and obsolete, so a publisher that still holds it retries.
++      replaced_root->is_obsolete_ = true;
++    } else {
++      locked_root->release_write_lock();  // the old root is now a child of the new one
++    }
++    locked_outermost->release_lock();
+   }
+ 
+   /*** Delete ***/
+@@ -2652,6 +2931,9 @@
+ 
+       model_node_type *parent = traversal_path.back().node;
+       int bucketID = traversal_path.back().bucketID;
++      // The replacement copied the leaf before the parent lock was taken; a root expansion in
++      // between raises the leaf's depth, so take the depth now that it is stable.
++      node->local_depth_ = leaf->local_depth_;
+       int repeats =
+           1 << (log_2_round_down(parent->num_children_) - leaf->local_depth_);
+       int start_bucketID =

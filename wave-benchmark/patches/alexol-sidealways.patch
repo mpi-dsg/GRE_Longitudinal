@@ -1,0 +1,367 @@
+# sidealways ablation for ALEX-OL: a permanent, XIndex-style delta buffer in every data node.
+#
+# Applies after alexol-sidebuf.patch, in alexol/src:
+#   patch -p0 -d alexol/src -i alexol-sidealways.patch
+# Driver flag (bench.cpp, next to `side`):
+#   else if (a == "sidealways") { alexol::sidebuf::enabled() = true; alexol::sidebuf::always() = true; }
+#
+# Off by default. Every change is guarded by sidebuf::always(); with it off, default, side and
+# bg runs execute the same code as before (single-thread memory per batch is identical).
+# With it on:
+#   - each data node has one SideBuf (kCap 1024), created on first use by CAS, freed with the node;
+#   - inserts append to it without the node lock and never write the array; the duplicate check
+#     reads the array, then takes the spinlock and checks the seal, as the side-buffer path does;
+#   - lookups search the array and, on a miss, the buffer (XIndex read path);
+#   - a full or sealed buffer makes the inserting thread take the node lock and rebuild the node
+#     (new fail code 7 from AlexDataNode::insert): ALEX's split/retrain/expand choice computed on
+#     array plus buffered keys, or, below the expansion threshold, a copy at the current capacity
+#     (fail 7 in run_smo_body); the buffer is drained into the replacement, which starts empty;
+#   - rebuilds (foreground, background, splits) use the permanent buffer as their side buffer;
+#   - root expansion, the one in-place modification of a live node's array, seals the outermost
+#     node's buffer and marks it excl first (readers and inserters restart), counts buffered keys
+#     in the new domain, and moves buffered keys routed to the new nodes into them;
+#   - memory accounting (Alex::data_size) adds sizeof(SideBuf) for every allocated buffer.
+--- alex_nodes.h
++++ alex_nodes.h
+@@ -162,6 +162,13 @@
+ namespace sidebuf {
+ inline bool &enabled() { static bool e = false; return e; }
+ constexpr int kCap = 1024;
++// Ablation (implies enabled): every data node keeps a permanent delta buffer, as XIndex does.
++// Inserts append to the buffer without the node lock and never write the array; lookups
++// search the array and, on a miss, the buffer. A full or sealed buffer makes the inserting
++// thread merge the node: it takes the lock and rebuilds the node exactly as a structural
++// modification does, draining the buffer into the replacement. Rebuilds use the permanent
++// buffer as their side buffer.
++inline bool &always() { static bool a = false; return a; }
+ }  // namespace sidebuf
+ 
+ #include <random>
+@@ -536,6 +543,9 @@
+   struct SideBuf {
+     uint32_t spin = 0;
+     bool sealed = false;
++    // sidealways only: the lock holder modifies the node's array in place (root expansion),
++    // so the array may not be read under this lock. Set together with sealed, never cleared.
++    bool excl = false;
+     int n = 0;
+     T k[sidebuf::kCap];
+     P v[sidebuf::kCap];
+@@ -1779,6 +1789,7 @@
+             version)) { // Test whether the lock is set and record the version
+       SideBuf *sb = __atomic_load_n(&side_, __ATOMIC_ACQUIRE);
+       if (sb == nullptr) return false;
++      if (sidebuf::always()) return find_payload_locked_always(sb, key, payload, found);
+       // A rebuild holds the lock and only reads this node, so its arrays are stable.
+       if (lock_stats::enabled()) lock_stats::local().side_read++;
+       int pos = exponential_search_upper_bound_ro(predict_position(key), key) - 1;
+@@ -1805,10 +1816,42 @@
+       *found = true;
+     } else {
+       *found = false;
++      // sidealways: XIndex read path, the buffer only on an array miss. The version check
++      // below covers a rebuild or root expansion that started meanwhile.
++      if (sidebuf::always()) {
++        SideBuf *sb = __atomic_load_n(&side_, __ATOMIC_ACQUIRE);
++        if (sb != nullptr) {
++          sb->lock();
++          for (int i = 0; i < sb->n; i++) {
++            if (key_equal(sb->k[i], key)) { *payload = sb->v[i]; *found = true; break; }
++          }
++          sb->unlock();
++        }
++      }
+     }
+     if (test_lock_version_change(
+             version)) // Test whether the version is changed or not
+       return false;
++    return true;
++  }
++
++  // sidealways, node locked. A rebuild or merge only reads the array, but a root expansion
++  // modifies it in place and marks the buffer excl first. The array is read before taking
++  // the spinlock: if excl is still clear then, the read preceded the modification.
++  bool find_payload_locked_always(SideBuf *sb, const T &key, P *payload, bool *found) {
++    if (lock_stats::enabled()) lock_stats::local().side_read++;
++    int pos = exponential_search_upper_bound_ro(predict_position(key), key) - 1;
++    bool hit = !(pos < 0 || !key_equal(ALEX_DATA_NODE_KEY_AT(pos), key));
++    P p = hit ? get_payload(pos) : P();
++    __atomic_thread_fence(__ATOMIC_ACQUIRE);
++    sb->lock();
++    if (sb->excl) { sb->unlock(); return false; }
++    for (int i = 0; !hit && i < sb->n; i++) {
++      if (key_equal(sb->k[i], key)) { p = sb->v[i]; hit = true; }
++    }
++    sb->unlock();
++    *found = hit;
++    if (hit) *payload = p;
+     return true;
+   }
+ 
+@@ -2097,6 +2140,7 @@
+   // already-existing key.
+   // -1 if no insertion.
+   std::pair<int, int> insert(const T &key, const P &payload) {
++    if (sidebuf::always()) return insert_always(key, payload);
+     // Try to get the exclusive lock
+     uint32_t lock_version;
+     if (!try_get_lock()) {
+@@ -2192,17 +2236,112 @@
+   // The modification the insert path would choose for this node, for the background
+   // expander, which runs it before the hard threshold. Caller holds the lock.
+   int bg_smo_code() const {
++    if (sidebuf::always()) return always_smo_code(false);
+     if (significant_cost_deviation()) return 1;
+     if (catastrophic_cost()) return 2;
+     if (num_keys_ > max_slots_ * kMinDensity_) return 3;
+     return 5;
+   }
+-  bool bg_due() const { return num_keys_ >= bgexp::soft() * expansion_threshold_; }
++  bool bg_due() const {
++    if (sidebuf::always()) return num_keys_ + side_count() >= bgexp::soft() * expansion_threshold_;
++    return num_keys_ >= bgexp::soft() * expansion_threshold_;
++  }
+ 
++  // ---- sidealways (see sidebuf::always) ----
++  int side_count() const {
++    SideBuf *sb = __atomic_load_n(&side_, __ATOMIC_ACQUIRE);
++    return sb == nullptr ? 0 : __atomic_load_n(&sb->n, __ATOMIC_RELAXED);
++  }
++  // The node's permanent buffer, created on first use. Exactly one buffer per node: the
++  // pointer only goes from null to a buffer, by CAS, and the buffer is freed with the node.
++  SideBuf *ensure_side() {
++    SideBuf *sb = __atomic_load_n(&side_, __ATOMIC_ACQUIRE);
++    if (sb != nullptr) return sb;
++    auto *fresh = new SideBuf;
++    if (__atomic_compare_exchange_n(&side_, &sb, fresh, false, __ATOMIC_ACQ_REL,
++                                    __ATOMIC_ACQUIRE))
++      return fresh;
++    delete fresh;
++    return sb;  // another thread published one; the failed CAS loaded it
++  }
++  // The modification ALEX's insert path would choose if the buffered keys were in the array.
++  // For a merge (buffer full or sealed): a catastrophic cost splits; at the expansion
++  // threshold, the usual split/retrain/expand choice; below it, code 7 compacts the node at
++  // its current capacity, the counterpart of ALEX inserting into the existing array. For the
++  // background expander, the same choice as bg_smo_code. A node whose array is empty (all its
++  // keys buffered) has nothing to split or retrain on and is resized. Caller holds the lock.
++  int always_smo_code(bool merge) const {
++    double total = num_keys_ + side_count();
++    if (num_keys_ == 0) return (!merge || total >= expansion_threshold_) ? 5 : 7;
++    if (merge) {
++      if (catastrophic_cost()) return 2;
++      if (total < expansion_threshold_) return 7;
++    }
++    if (significant_cost_deviation()) return 1;
++    if (catastrophic_cost()) return 2;
++    if (total > max_slots_ * kMinDensity_) return 3;
++    return 5;
++  }
++  // Density to pass to resize_from_existing so that the replacement has the target density
++  // once the buffered keys are drained into it (code 7: keep the current capacity).
++  double always_density(int fail, double target) const {
++    if (num_keys_ == 0) return target;
++    // resize_from_existing truncates num_keys_ / density; the half slot keeps that at
++    // data_capacity_ instead of one below it after rounding.
++    if (fail == 7) return num_keys_ / (data_capacity_ + 0.5);
++    return target * num_keys_ / (num_keys_ + side_count());
++  }
++
++  // Insert without the node lock: the array of a live node is never written in place in this
++  // mode (only a root expansion does, after marking the buffer excl). The duplicate check
++  // reads the array before taking the spinlock; a rebuild or root expansion seals the buffer
++  // under the same spinlock before it drains or modifies anything, so an append that finds the
++  // buffer open is drained into the replacement, and an array read that finds excl clear
++  // preceded any in-place modification.
++  // Returns 0 (appended), 6 (appended; enqueue for the background expander), -1 (duplicate),
++  // 4 (restart), or 7 (buffer full or sealed; lock now held, caller merges and restarts).
++  std::pair<int, int> insert_always(const T &key, const P &payload) {
++    SideBuf *sb = ensure_side();
++    int pos = exponential_search_upper_bound_ro(predict_position(key), key) - 1;
++    bool dup = !allow_duplicates && pos >= 0 && key_equal(ALEX_DATA_NODE_KEY_AT(pos), key);
++    __atomic_thread_fence(__ATOMIC_ACQUIRE);
++    sb->lock();
++    if (!sb->excl) {
++      if (dup) { sb->unlock(); return {-1, pos}; }
++      for (int i = 0; !allow_duplicates && i < sb->n; i++) {
++        if (key_equal(sb->k[i], key)) { sb->unlock(); return {-1, -1}; }
++      }
++      if (!sb->sealed && sb->n < sidebuf::kCap) {
++        sb->k[sb->n] = key;
++        sb->v[sb->n] = payload;
++        __atomic_store_n(&sb->n, sb->n + 1, __ATOMIC_RELAXED);
++        bool enqueue = false;
++        if (bgexp::enabled() && !bg_queued_ &&
++            num_keys_ + sb->n >= bgexp::soft() * expansion_threshold_) {
++          bg_queued_ = true;
++          enqueue = true;
++        }
++        sb->unlock();
++        if (lock_stats::enabled()) lock_stats::local().side_ins++;
++        return {enqueue ? 6 : 0, -1};
++      }
++    }
++    sb->unlock();
++    // Full or sealed, or a root expansion is modifying the array: merge if the node is free.
++    // A retired node stays locked, so holding the lock means this node is still live.
++    if (!try_get_lock()) {
++      if (lock_stats::enabled()) { lock_stats::local().side_full++; lock_stats::trace().sealed++; }
++      return {4, -1};
++    }
++    __atomic_store_n(&smo_, true, __ATOMIC_RELAXED);
++    return {7, -1};
++  }
++
+   // Rebuild protocol, called by the lock holder. open_side before copying from this node,
+   // then seal_side and drain into the replacement before publishing it.
+   SideBuf *open_side() {
+     if (!sidebuf::enabled()) return nullptr;
++    if (sidebuf::always()) return ensure_side();  // the node's permanent buffer
+     auto *sb = new SideBuf;
+     __atomic_store_n(&side_, sb, __ATOMIC_RELEASE);
+     return sb;
+--- alex.h
++++ alex.h
+@@ -1830,6 +1830,15 @@
+     if (fail == 6) {
+       bg_push(key);
+       fail = 0;
++    }
++    if (fail == 7) {
++      // sidealways: the node's buffer is full or sealed and this thread now holds the node's
++      // lock. Rebuild the node as ALEX would with the buffered keys counted, draining the
++      // buffer into the replacement, then insert into the replacement's empty buffer.
++      int code = leaf->always_smo_code(true);
++      if (lock_stats::enabled()) { lock_stats::local().fg_smo++; lock_stats::trace().smo++; }
++      run_smo(leaf, code, key);
++      goto RETRY;
+     }
+ 
+     // If no insert, figure out what to do with the data node to decrease the
+@@ -1893,7 +1902,9 @@
+     leaf->open_side();
+     {
+ 
+-      if (fail == 5) { // Data node resizing
++      // fail 7 (sidealways only): merge below the expansion threshold, i.e. compaction of
++      // the buffer into a copy of the node at its current capacity.
++      if (fail == 5 || fail == 7) { // Data node resizing
+         // std::cout << "DN expansion with node scaling, key = " << key <<
+         // std::endl;
+         // 1. Allocate new node
+@@ -1905,7 +1916,10 @@
+         // 2. Resizing
+         bool keep_left = leaf->is_append_mostly_right();
+         bool keep_right = leaf->is_append_mostly_left();
+-        node->resize_from_existing(leaf, data_node_type::kMinDensity_, false,
++        double density = data_node_type::kMinDensity_;
++        // sidealways: size the replacement for the array plus the buffered keys.
++        if (sidebuf::always()) density = leaf->always_density(fail, density);
++        node->resize_from_existing(leaf, density, false,
+                                    keep_left, keep_right);
+         data_node_type::seal_and_drain(side, node);
+ 
+@@ -1972,7 +1986,10 @@
+         // 2. Rehash from old node to new node
+         bool keep_left = leaf->is_append_mostly_right();
+         bool keep_right = leaf->is_append_mostly_left();
+-        node->resize_from_existing(leaf, data_node_type::kMinDensity_, true,
++        double density = data_node_type::kMinDensity_;
++        // sidealways: size the replacement for the array plus the buffered keys.
++        if (sidebuf::always()) density = leaf->always_density(5, density);
++        node->resize_from_existing(leaf, density, true,
+                                    keep_left, keep_right);
+         data_node_type::seal_and_drain(side, node);
+ 
+@@ -2641,6 +2658,29 @@
+       return;
+     }
+     if (lock_stats::enabled()) lock_stats::local().root_expand++;
++
++    // sidealways: this expansion modifies the outermost node's array in place, which readers
++    // and inserters of that node otherwise read without its lock. Seal the buffer and mark it
++    // excl before any modification, so they restart instead; take the buffered keys into
++    // account for the new domain; and route buffered keys that now belong to a new node into
++    // it before publishing (below). The remaining ones stay in the sealed buffer, and the
++    // next insert into the node merges it.
++    decltype(locked_outermost->side_) xsb = nullptr;
++    bool xany = false;
++    T xmin = T(), xmax = T();
++    if (sidebuf::always()) {
++      xsb = locked_outermost->ensure_side();
++      xsb->lock();
++      xsb->sealed = true;
++      xsb->excl = true;
++      for (int i = 0; i < xsb->n; i++) {
++        if (!xany || xsb->k[i] < xmin) xmin = xsb->k[i];
++        if (!xany || xsb->k[i] > xmax) xmax = xsb->k[i];
++        xany = true;
++      }
++      xsb->unlock();
++      __atomic_thread_fence(__ATOMIC_SEQ_CST);
++    }
+ 
+     // Find the new bounds of the key domain.
+     // Need to be careful to avoid overflows in the key type.
+@@ -2650,8 +2690,9 @@
+     T new_domain_max = istats_.key_domain_max_;
+     data_node_type *outermost_node;
+     if (expand_left) {
+-      auto key_difference = static_cast<double>(istats_.key_domain_min_ -
+-                                                std::min(key, get_min_key()));
++      T lowest = std::min(key, get_min_key());
++      if (xany && xmin < lowest) lowest = xmin;
++      auto key_difference = static_cast<double>(istats_.key_domain_min_ - lowest);
+       expansion_factor = pow_2_round_up(static_cast<int>(
+           std::ceil((key_difference + domain_size) / domain_size)));
+       // Check for overflow. To avoid overflow on signed types while doing
+@@ -2670,8 +2711,9 @@
+       istats_.num_keys_below_key_domain = 0;
+       outermost_node = locked_outermost;
+     } else {
+-      auto key_difference = static_cast<double>(std::max(key, get_max_key()) -
+-                                                istats_.key_domain_max_);
++      T highest = std::max(key, get_max_key());
++      if (xany && xmax > highest) highest = xmax;
++      auto key_difference = static_cast<double>(highest - istats_.key_domain_max_);
+       expansion_factor = pow_2_round_up(static_cast<int>(
+           std::ceil((key_difference + domain_size) / domain_size)));
+       // Check for overflow. To avoid overflow on signed types while doing
+@@ -2867,6 +2909,27 @@
+       first_new_leaf->prev_leaf_ = outermost_node;
+     }
+ 
++    // sidealways: move buffered keys that the new root routes to a new node into that node,
++    // which is still private. Readers of the buffer hold its spinlock.
++    if (xsb != nullptr) {
++      xsb->lock();
++      int kept = 0;
++      for (int i = 0; i < xsb->n; i++) {
++        T k = xsb->k[i];
++        int b = static_cast<int>(root->model_.predict_double(k));
++        b = std::min<int>(std::max<int>(b, 0), root->num_children_ - 1);
++        if (b >= new_nodes_start && b < new_nodes_end) {
++          static_cast<data_node_type *>(root->children_[b])->insert_nolock(k, xsb->v[i]);
++        } else {
++          xsb->k[kept] = k;
++          xsb->v[kept] = xsb->v[i];
++          kept++;
++        }
++      }
++      xsb->n = kept;
++      xsb->unlock();
++    }
++
+     istats_.key_domain_min_ = new_domain_min;
+     istats_.key_domain_max_ = new_domain_max;
+     // Publish the fully built root.
+@@ -3027,6 +3090,9 @@
+       AlexNode<T, P> *cur = node_it.current();
+       if (cur->is_leaf_) {
+         size += static_cast<data_node_type *>(cur)->data_size();
++        // sidealways: each node's permanent buffer, if allocated.
++        if (sidebuf::always() && static_cast<data_node_type *>(cur)->side_ != nullptr)
++          size += sizeof(*static_cast<data_node_type *>(cur)->side_);
+       }
+     }
+     return size;

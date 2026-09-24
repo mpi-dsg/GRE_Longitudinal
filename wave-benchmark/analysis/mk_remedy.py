@@ -7,7 +7,7 @@ that has not occurred. See results/README.md.
 """
 import glob, os, statistics as st, sys
 R = os.environ.get("WAVE_RESULTS",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "raw"))
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "raw"))
 OUT = sys.argv[1] if len(sys.argv) > 1 else "../../figures/waves"
 C = ("tag index seed threads batch keys p50 p99 p999 p9999 max n10 n100 n1ms nops "
      "batch_ns mem").split()

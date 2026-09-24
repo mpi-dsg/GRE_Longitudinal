@@ -5,9 +5,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# Drawn at its printed size (one column) so every label is 10 pt, as the CFP requires.
+plt.rcParams.update({"font.size": 10, "axes.labelsize": 10, "xtick.labelsize": 10,
+                     "ytick.labelsize": 10, "legend.fontsize": 10})
+
 import os as _os
 R = _os.environ.get("WAVE_RESULTS",
-    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "results", "raw"))
+    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "results", "raw"))
 
 C = "tag index seed threads batch keys p50 p99 p999 p9999 max n10 n100 n1ms nops batch_ns mem".split()
 BULK, TOTAL = 100_000_000, 400_000_000
@@ -24,14 +28,13 @@ def predicted():
     return w
 
 series = [("alexol", "ALEX-OL", "#c0392b", "-", "o"),
-          ("alexolstag", "ALEX-OL, randomized density", "#2980b9", "-", "s"),
+          ("alexolstag", "randomized density", "#2980b9", "-", "s"),
           ("sali", "SALI", "#27ae60", "--", "^"),
           ("btreebulk", "B$^+$-tree-OLC", "#7f8c8d", ":", "d")]
 
-fig, ax = plt.subplots(figsize=(7.0, 2.7))
+fig, ax = plt.subplots(figsize=(3.33, 2.6), layout="constrained")
 for v in predicted():
     ax.axvline(v / 1e6, color="0.85", lw=6, zorder=0)
-ax.text(predicted()[0] / 1e6, 1.6e4, " predicted waves", fontsize=7, color="0.45", va="top")
 
 plotted = 0
 for key, lab, col, ls, mk in series:
@@ -46,11 +49,11 @@ for key, lab, col, ls, mk in series:
 ax.set_yscale("log")
 ax.set_xlabel("keys in index (millions)")
 ax.set_ylabel("inserts $>100\\,\\mu$s\nper batch")
-ax.legend(fontsize=7, frameon=False, ncol=2, loc="upper left")
+fig.legend(frameon=False, ncol=2, loc="outside upper center", handlelength=1.4,
+           columnspacing=0.8, handletextpad=0.4)
 ax.grid(axis="y", alpha=0.25, lw=0.5)
 ax.set_axisbelow(True)
 for sp in ("top", "right"):
     ax.spines[sp].set_visible(False)
-fig.tight_layout()
-fig.savefig(f"{OUT}/fig_scale400.pdf", bbox_inches="tight")
+fig.savefig(f"{OUT}/fig_scale400.pdf")
 print(f"wrote {OUT}/fig_scale400.pdf with {plotted} series")

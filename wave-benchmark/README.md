@@ -5,8 +5,9 @@ indexes. Everything needed to check the numbers, re-run the experiments, or anal
 differently is in this directory.
 
 ```
-bench.cpp btree_bulk.h build.sh run.sh patches/ shim/   the harness
-results/raw/          903 CSVs, ten sets, each backing a claim
+bench.cpp btree_bulk.h build.sh run.sh patches/ shim/ shim_mkl/   the harness
+runs/                 the scripts that produced the final run sets (mq6, mq7, mq8)
+results/raw/          CSVs, one directory per experiment, each backing a claim
 results/README.md     layout, column meanings, how to read them
 analysis/             generators for the paper's tables and figure
 analysis/summarize.py prints every headline number from the data
@@ -25,11 +26,29 @@ LIPP-OL, SALI, a bulk-loaded B+tree and ART-OLC show nothing comparable on the s
 
 Randomizing the bulk-load density, which is the remedy the B-tree literature established,
 decorrelates the cohort but does not reduce the number of slow operations, and under
-concurrency increases it: inserts restart when they meet a modification in progress, and
-spreading expansions across the workload means more of them do (147M restarts against 283M at
-16 threads; zero at one thread, in both arms). Reducing `max_data_node_size` does reduce the
-cost: 32768 to 2048 entries takes slow inserts from 649 to 10 at one thread and 4563 to 998 at
-sixteen, for 10-14% on median lookup latency.
+concurrency increases it (147M insert restarts against 283M at 16 threads; zero at one thread,
+in both arms). Shrinking data nodes from 32768 to 2048 entries removes the waves at 4M keys but
+at 400M makes the run 37-38% slower and median lookups 36-58% slower.
+
+Instrumenting the insert path shows why: about 97% of restarts meet a node whose lock is held by
+a rebuild. `patches/alexol-sidebuf.patch` removes that blocking. A side buffer lets inserts and
+lookups proceed while a node is rebuilt, and background threads perform rebuilds at a soft
+threshold. Both are off by default (`side`, `bg`, `bgthreads=N`, `bgsoft=F`). On 400M books keys
+(final binary, medians of three seeds, `results/raw/r6/b400`) the design takes slow inserts from
+57,450 to 249 at one thread and, with four background threads, from 71,392 to 4,247 at sixteen.
+Median lookup latency under a balanced mix rises by 6-10%.
+
+`alexol-sidebuf.patch` also fixes defects in released ALEX-OL, in every configuration, the
+baseline included: root expansion left children's depths stale (later rebuilds overwrote sibling
+subtrees), mutated the live root in place and freed its child array under readers, and took no
+lock on the outermost leaf; a rebuild could copy a stale depth before locking its parent; and a
+lookup could miss a key on a floating-point split boundary (lookups that miss now check the
+adjacent leaves). An unflagged run is therefore ALEX-OL with these fixes and no design changes.
+
+`patches/alexol-sidealways.patch` (optional, see `patches/README-sidealways.md`) adds an ablation
+with a permanent per-node buffer, as XIndex keeps: every insert goes to the node's buffer and a
+full buffer is merged into the node. It isolates the cost of buffering all the time against
+buffering only during a rebuild.
 
 ## Check the numbers without running anything
 
@@ -46,7 +65,14 @@ counters.
 ```sh
 sh build.sh                                  # from inside a GRE checkout
 GRE=/path/to/GRE_Longitudinal sh build.sh    # or point it elsewhere
+XF=1 sh build.sh                             # also XIndex and FINEdex
+XF=1 SIDEALWAYS=1 sh build.sh                # also the permanent-buffer ablation
 ```
+
+The measured binaries were built with `XF=1` (runs in `r6`, `r7`) and `XF=1 SIDEALWAYS=1`
+(runs in `r8`). With its flag off, the ablation patch leaves every other arm unchanged.
+XIndex and FINEdex need MKL's `LAPACKE_dgels`; `shim_mkl/` supplies a least-squares stand-in so
+no MKL installation is needed.
 
 Requires g++ with OpenMP, oneTBB headers and `libtbb`. It copies the competitor sources into
 `_c/`, patches the copy, and compiles; your GRE checkout is never modified. The build ends with
@@ -77,6 +103,7 @@ restarting is safe.
 | 2 | ~60 min | Balanced read/write. Reads are timed separately (`r_*` columns) |
 | 3 | ~90 min | OSM, where heterogeneous key density weakens the effect |
 | 4 | — | Additional seeds |
+| 5 | ~2 h | The design: side buffer and background expansion against ALEX-OL and 2048-entry nodes |
 
 ## Running it directly
 
@@ -84,10 +111,19 @@ restarting is safe.
 ./bench <index> <bulk> <total> <batch> <seed> <threads> <tag> [options...]
 ```
 
-`<index>` is one of `alexol`, `lippol`, `sali`, `btreebulk`, `artolc`, `alexsized`.
+`<index>` is one of `alexol`, `lippol`, `sali`, `btreebulk`, `artolc`, `alexsized`, and with
+`XF=1` also `xindex`, `finedex`.
 Options: `stagger` (randomized bulk-load density), `lowonly`, `delta=X`, `nodebytes=N`
 (with `alexsized`), `bfill=F` and `bspread=S` (with `btreebulk`), `readpct=N`,
-`data=<sosd file>`, `lockstats` (needs a `-DLOCK_STATS` build).
+`data=<sosd file>`, `lockstats` (restart and rebuild counters, printed as `LOCK2` rows),
+`side` (side buffer), `bg` (background expansion), `bgthreads=N`, `bgsoft=F` (soft threshold as
+a fraction of the hard one, default 0.9375), `sidealways` (permanent buffer, `SIDEALWAYS=1`
+builds only), `recent` (with `readpct`, lookups target keys the same thread just inserted, so
+they reach nodes under rebuild and their buffers; every such lookup must hit or the run fails),
+`order=shuffle|zipf|sorted` (insert order after the bulk load; `zipf` concentrates inserts in
+1024 key ranges with Zipfian weights, `ztheta=` sets the skew, default 0.99). Each batch also
+prints a `CPU` row: CPU seconds of the whole process over the timed interval, background threads
+included.
 
 ## Two things that will bite you
 
@@ -105,8 +141,11 @@ pools with `omp_get_thread_num()`, which returns 0 for every raw thread, so they
 unsynchronized pool. LIPP-OL crashes an internal assertion. SALI does not crash: it races
 silently and returns clean, flat numbers. If you adapt this driver, keep the parallel region.
 
-Every run ends with a 100k-probe recall check. Treat a missing `VERIFY ... 100.0000%` as a
-failed run.
+Every run ends with a 100k-probe recall check and an exhaustive check of every inserted key
+and payload (`FULLVERIFY ... 0/N missing or wrong`). A failing run exits with status 2, and the
+run scripts keep its output only as `.failN`. FINEdex loses one key in some 400M runs; XIndex
+makes no progress on some seeds (kept as `.fail124`, a timeout). With a 100k-key bulk load at 32 threads, released ALEX-OL itself crashes or loses
+keys in some runs; the exhaustive check is what shows it.
 
 ## Analysis scripts
 
@@ -117,6 +156,10 @@ failed run.
 | `mk400b.py` | the 400M comparison table |
 | `mk_remedy.py` | the remedy table, from counts |
 | `mkfig.py` | the 400M trace figure |
+| `mk_mech.py` | the design tables; prints every number the design evaluation quotes |
+| `mkfig_mech.py` | the design figure |
+| `mk_cmp.py` | the comparison with XIndex and FINEdex |
+| `mk_panel.py` | CPU time, lookups of just-inserted keys, skewed and sorted inserts, the permanent-buffer ablation |
 | `analyze.py` | per-run analysis for arbitrary result directories |
 
 Set `WAVE_RESULTS` to point them at a different results root. `mk_remedy.py` is separate from
@@ -125,7 +168,7 @@ improvement that had not occurred.
 
 ## Measurement hygiene
 
-Everything here was measured on an otherwise idle dual-socket Xeon Gold 6134M (16 physical
-cores, 755 GB, oneTBB). Do not measure this on a shared or loaded machine: on a laptop our
+Everything here was measured on otherwise idle dual-socket Xeon Gold 6134M servers (16 physical
+cores, 755 GB, oneTBB); every comparison uses runs from one server. Do not measure this on a shared or loaded machine: on a laptop our
 quiet-batch p99.9 ranged 44-1347 us across identical runs, which is larger than most of the
 effects reported, and it concealed rather than created them.

@@ -4,7 +4,7 @@ import glob, os, statistics as st, sys
 
 import os as _os
 R = _os.environ.get("WAVE_RESULTS",
-    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "results", "raw"))
+    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "results", "raw"))
 C="tag index seed threads batch keys p50 p99 p999 p9999 max n10 n100 n1ms nops batch_ns mem".split()
 OUT=sys.argv[1] if len(sys.argv)>1 else "figures/waves"
 os.makedirs(OUT,exist_ok=True)

@@ -18,7 +18,7 @@ run() {  # name index threads seed dataset extra...
   [ -s "$f" ] && { echo "skip $f"; return; }
   echo "run  $f"
   ./bench "$idx" $B $TOT $BS "$seed" "$T" x "$@" "data=$DATA/${ds}_800M_uint64" \
-      2>>results/verify.log | grep -E "^x," > "$f"
+      2>>results/verify.log | grep -E "^x,|^LOCK2," > "$f"
 }
 
 # TIER 1 - independent reproduction. This is the one that matters most: same
@@ -72,4 +72,18 @@ if [ "$TIER" = 4 ] || [ "$TIER" = all ]; then
     done
   done
   echo TIER4_DONE
+fi
+
+# TIER 5 - the design (paper Section 5): side buffer and background expansion against
+# unmodified ALEX-OL and the 2048-entry node bound, 400M books keys, one binary for every
+# arm. Runs verify every key at the end (FULLVERIFY in results/verify.log). Roughly two hours.
+if [ "$TIER" = 5 ] || [ "$TIER" = all ]; then
+  for T in 16 1; do
+    run d_base    alexol    $T 1866 books
+    run d_side    alexol    $T 1866 books side
+    run d_bgside  alexol    $T 1866 books bg side
+    run d_bgside2 alexol    $T 1866 books bg side bgthreads=2
+    run d_ns2048  alexsized $T 1866 books nodebytes=32768
+  done
+  echo TIER5_DONE
 fi
