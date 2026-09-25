@@ -20,8 +20,8 @@ Bulk loading ALEX sets every data node to `kInitDensity_` (0.7). Nodes expand at
 threshold together: restructuring arrives in waves at key counts `N0 * 8/7`, then successive
 multiples of `4/3`, where `N0` is the number of keys bulk loaded.
 
-On 400M SOSD books keys those predicted batches carry a median of 8334 inserts slower than
-100 us against 9 in the others, with 89% of all slow inserts in five of twenty-four batches.
+On 400M SOSD books keys those predicted batches carry a median of 8284 inserts slower than
+100 us against 10 in the others (medians over three seeds), with 89% of all slow inserts in five of twenty-four batches.
 LIPP-OL, SALI, a bulk-loaded B+tree and ART-OLC show nothing comparable on the same workload.
 
 Randomizing the bulk-load density, which is the remedy the B-tree literature established,
@@ -34,9 +34,13 @@ Instrumenting the insert path shows why: about 97% of restarts meet a node whose
 a rebuild. `patches/alexol-sidebuf.patch` removes that blocking. A side buffer lets inserts and
 lookups proceed while a node is rebuilt, and background threads perform rebuilds at a soft
 threshold. Both are off by default (`side`, `bg`, `bgthreads=N`, `bgsoft=F`). On 400M books keys
-(final binary, medians of three seeds, `results/raw/r6/b400`) the design takes slow inserts from
-57,450 to 249 at one thread and, with four background threads, from 71,392 to 4,247 at sixteen.
-Median lookup latency under a balanced mix rises by 6-10%.
+(final binary, medians of three seeds) the design takes inserts slower than 100 us from 57,450 to
+249 at one thread (`results/raw/r6/b400`) and, with four background threads, from 70,928 to 4,029
+at sixteen at an unchanged run time (`results/raw/r9/b400`). Median lookup latency under a
+balanced mix rises by 6-10%. Changing the three density constants moves the bursts exactly to
+positions recorded before the runs (`results/raw/r11/consts`, `results/raw/predictions/`), and a
+variant that buffers every insert at all times takes about 17 times as long as the baseline
+(`results/raw/r8`).
 
 `alexol-sidebuf.patch` also fixes defects in released ALEX-OL, in every configuration, the
 baseline included: root expansion left children's depths stale (later rebuilds overwrote sibling
@@ -129,10 +133,10 @@ included.
 
 **Report counts, not percentiles.** A wave produces roughly one slow insert per expanding node,
 and whether a percentile sees them depends on how that count compares with its rank cutoff,
-which depends on batch size. The same 400M run reports a wave-to-quiet ratio of 1.8x measured
-by p99.9 over 12.5M-operation batches and 926x measured by counting inserts over 100 us.
+which depends on batch size. The same 400M runs report a wave-to-quiet ratio of 1.8x measured
+by p99.9 over 12.5M-operation batches and 828x measured by counting inserts over 100 us.
 Percentiles also flatter any change that merely spreads the same slow operations more thinly:
-that produced a 240-fold "improvement" that does not exist. Use `n_gt10us`, `n_gt100us`,
+that produced a 237-fold "improvement" that does not exist. Use `n_gt10us`, `n_gt100us`,
 `n_gt1ms`. `results/README.md` explains this at length and it is the single most important
 thing to understand before interpreting any of these files.
 
@@ -154,7 +158,10 @@ keys in some runs; the exhaustive check is what shows it.
 | `summarize.py` | every headline number, plain text, no arguments |
 | `mktables.py` | thread-sweep tables |
 | `mk400b.py` | the 400M comparison table |
-| `mk_remedy.py` | the remedy table, from counts |
+| `mk_remedy.py` | the randomized-density table, from counts in `r13/sweep` |
+| `mk_r13.py` | every number from the reruns in `r13`: 4M burst ratios, restarts, variants, pinning, B+-tree fill, node sizes, 400M randomized density |
+| `mk_account.py` | the account table (memory, run time, latency, key check per index) |
+| `mkfig_mech4m.py` | the 4M design figure |
 | `mkfig.py` | the 400M trace figure |
 | `mk_mech.py` | the design tables; prints every number the design evaluation quotes |
 | `mkfig_mech.py` | the design figure |

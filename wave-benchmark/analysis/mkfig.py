@@ -19,7 +19,17 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else "figures/waves"
 os.makedirs(OUT, exist_ok=True)
 
 def L(f):
-    return [dict(zip(C, l.strip().split(','))) for l in open(f) if l.count(',') == 16]
+    # Earlier driver: 17 columns. Final driver: 23 columns, with batch_ns and mem last.
+    out = []
+    for l in open(f):
+        p = l.strip().split(',')
+        if p[0] != "x":
+            continue
+        if len(p) == 23:
+            p = p[:15] + p[21:]
+        if len(p) == 17:
+            out.append(dict(zip(C, p)))
+    return out
 
 def predicted():
     w, x = [], BULK * 8 / 7
@@ -27,22 +37,27 @@ def predicted():
         w.append(x); x *= 4 / 3
     return w
 
-series = [("alexol", "ALEX-OL", "#c0392b", "-", "o"),
-          ("alexolstag", "randomized density", "#2980b9", "-", "s"),
-          ("sali", "SALI", "#27ae60", "--", "^"),
-          ("btreebulk", "B$^+$-tree-OLC", "#7f8c8d", ":", "d")]
+# ALEX-OL series from the final driver and fixed code; SALI and the B+-tree from the earlier driver.
+series = [("r6/b400/base_books_t1_s1866.csv", "ALEX-OL", "#c0392b", "-", "o"),
+          ("r13/stag400/stag_books_t1_s1866.csv", "randomized density", "#2980b9", "-", "s"),
+          ("scale400_books/sali_books_t1_s1866.csv", "SALI", "#27ae60", "--", "^"),
+          ("scale400_books/btreebulk_books_t1_s1866.csv", "B$^+$-tree-OLC", "#7f8c8d", ":", "d")]
 
 fig, ax = plt.subplots(figsize=(3.33, 2.6), layout="constrained")
+# Each point is a batch, drawn at its midpoint; a band covers each batch that contains a predicted
+# burst position.
+BS = 12_500_000
 for v in predicted():
-    ax.axvline(v / 1e6, color="0.85", lw=6, zorder=0)
+    lo = BULK + (v - BULK) // BS * BS
+    ax.axvspan(lo / 1e6, (lo + BS) / 1e6, color="0.85", lw=0, zorder=0)
 
 plotted = 0
 for key, lab, col, ls, mk in series:
-    fs = sorted(glob.glob(f"{R}/scale400_books/{key}_books_t1_s*.csv"))
+    fs = sorted(glob.glob(f"{R}/{key}"))
     if not fs: continue
     x = L(fs[0])
     if len(x) < 20: continue
-    ax.plot([int(r['keys']) / 1e6 for r in x], [max(int(r['n100']), 0.5) for r in x],
+    ax.plot([(int(r['keys']) - BS / 2) / 1e6 for r in x], [max(int(r['n100']), 0.5) for r in x],
             label=lab, color=col, ls=ls, marker=mk, ms=3, lw=1.2)
     plotted += 1
 

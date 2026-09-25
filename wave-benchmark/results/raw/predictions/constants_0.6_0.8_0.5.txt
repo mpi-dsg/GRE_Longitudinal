@@ -1,0 +1,23 @@
+# Predicted burst positions for ALEX-OL with modified density constants
+# Written 2026-09-25T00:29 CEST, before any run with these constants.
+# Constants: kInitDensity_=0.6, kMaxDensity_=0.8, kMinDensity_=0.5 (released: 0.7, 0.8, 0.6).
+# First burst at N0*dmax/dinit = N0*4/3, then every factor dmax/dmin = 1.6.
+# Batch k covers key counts (N0+(k-1)*B, N0+k*B].
+4M synthetic: N0=1000000 total=4000000 batch=100000
+  modified: burst at 1.333M keys -> batch 4
+  modified: burst at 2.133M keys -> batch 12
+  modified: burst at 3.413M keys -> batch 25
+  released: burst at 1.143M keys -> batch 2
+  released: burst at 1.524M keys -> batch 6
+  released: burst at 2.032M keys -> batch 11
+  released: burst at 2.709M keys -> batch 18
+  released: burst at 3.612M keys -> batch 27
+400M books: N0=100000000 total=400000000 batch=12500000
+  modified: burst at 133.333M keys -> batch 3
+  modified: burst at 213.333M keys -> batch 10
+  modified: burst at 341.333M keys -> batch 20
+  released: burst at 114.286M keys -> batch 2
+  released: burst at 152.381M keys -> batch 5
+  released: burst at 203.175M keys -> batch 9
+  released: burst at 270.899M keys -> batch 14
+  released: burst at 361.199M keys -> batch 21

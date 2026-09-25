@@ -18,7 +18,7 @@ guard() { local o=$(others)
     echo "BUSY_STOP $(date) other users running before $1" >> mq8_verify.log
     ps -eo user:32,pid,stat,pcpu,args --no-headers | awk '$1!="bindsch" && $1!="root" && $3 ~ /^R/' >> mq8_verify.log
     echo BUSY_STOP; exit 3; fi; }
-r() { local f=$1 to=$2 arm=$3; shift 3; [ -s "$f" ] && return
+r() { local f=$1 to=$2 arm=$3; shift 3; [ -s "$f" ] && return; ls "$f".fail* >/dev/null 2>&1 && return
   guard "$f"
   timeout $to ./bench alexol "$@" $(flags $arm) 2>>mq8_verify.log | grep --line-buffered -E "^x,|^CPU,|^LOCK2,|^LOCK3," > "$f.tmp"
   local rc=${PIPESTATUS[0]}; echo "RC $rc $f $(date +%H:%M:%S)" >> mq8_verify.log

@@ -139,7 +139,8 @@ B4 = {}
 ARM4 = ("base", "ns2048", "side", "bgside", "bgside2", "bgside4")
 for T in (1, 16):
     for a in ARM4:
-        B4[(a, T)] = cell(f"r6/b400/{a}_books_t{T}_s*.csv", 24)
+        # 16 threads from r9 (rerun on an idle server); r6 measured them on a slower machine state.
+        B4[(a, T)] = cell(f"{'r9' if T == 16 else 'r6'}/b400/{a}_books_t{T}_s*.csv", 24)
         c = B4[(a, T)]
         if not c:
             continue
@@ -156,7 +157,7 @@ with open(f"{OUT}/tab_mech400.tex", "w") as o:
     o.write("\\begin{tabular}{lrrrrrrrr}\n\\toprule\n")
     o.write("& \\multicolumn{4}{c}{1 thread} & \\multicolumn{4}{c}{16 threads} \\\\\n")
     o.write("\\cmidrule(lr){2-5}\\cmidrule(lr){6-9}\n")
-    o.write("Configuration & slow & worst & time & mem & slow & worst & time & mem \\\\\n\\midrule\n")
+    o.write("Configuration & $>$100\\,\\textmu s & worst & time & mem & $>$100\\,\\textmu s & worst & time & mem \\\\\n\\midrule\n")
     for a in ARM4:
         p, q = B4[(a, 1)], B4[(a, 16)]
         o.write(f"{LAB4[a]} & {f0(p, 'slow', '{:,.0f}')} & {f0(p, 'maxb', '{:,.0f}')} & {f0(p, 'wall', '{:.0f}')} & "

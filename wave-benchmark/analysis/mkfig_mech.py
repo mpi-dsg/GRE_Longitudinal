@@ -16,6 +16,7 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else "figures/waves"
 os.makedirs(OUT, exist_ok=True)
 BULK, TOTAL = 100_000_000, 400_000_000
 NF = 23  # fields in an x-row of the current driver
+BS = 12_500_000  # keys per batch; each point is drawn at its batch's midpoint
 
 
 def rows(f):
@@ -23,14 +24,14 @@ def rows(f):
     for line in open(f):
         p = line.strip().split(",")
         if p[0] == "x" and len(p) == NF:
-            out.append((int(p[5]) / 1e6, max(int(p[12]), 0.5)))
+            out.append(((int(p[5]) - BS / 2) / 1e6, max(int(p[12]), 0.5)))
     return out
 
 
 def predicted():
     w, x = [], BULK * 8 / 7
     while x < TOTAL:
-        w.append(x / 1e6)
+        w.append(BULK + (x - BULK) // BS * BS)
         x *= 4 / 3
     return w
 
@@ -42,9 +43,10 @@ arms = [("base", "ALEX-OL", "#c0392b", "-", "o"),
 fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.6), sharey=True, layout="constrained")
 for ax, T in zip(axes, (1, 16)):
     for v in predicted():
-        ax.axvline(v, color="0.88", lw=5, zorder=0)
+        # A band covers each batch that contains a predicted burst position.
+        ax.axvspan(v / 1e6, (v + BS) / 1e6, color="0.88", lw=0, zorder=0)
     for key, lab, col, ls, mk in arms:
-        fs = sorted(glob.glob(f"{R}/r6/b400/{key}_books_t{T}_s1866.csv"))
+        fs = sorted(glob.glob(f"{R}/{'r9' if T == 16 else 'r6'}/b400/{key}_books_t{T}_s1866.csv"))
         if not fs:
             continue
         x = rows(fs[0])

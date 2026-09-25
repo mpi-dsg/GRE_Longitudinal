@@ -1,0 +1,3 @@
+Min key = 1
+Max key = 7999997
+nodes=300  min=0.7000  med=0.7003  max=0.7039  spread=0.0039
