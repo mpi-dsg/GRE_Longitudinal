@@ -15,7 +15,7 @@ R = _os.environ.get("WAVE_RESULTS",
 
 C = "tag index seed threads batch keys p50 p99 p999 p9999 max n10 n100 n1ms nops batch_ns mem".split()
 BULK, TOTAL = 100_000_000, 400_000_000
-OUT = sys.argv[1] if len(sys.argv) > 1 else "figures/waves"
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 os.makedirs(OUT, exist_ok=True)
 
 def L(f):
@@ -37,11 +37,11 @@ def predicted():
         w.append(x); x *= 4 / 3
     return w
 
-# ALEX-OL series from the final driver and fixed code; SALI and the B+-tree from the earlier driver.
+# All series from the final driver on one server.
 series = [("r6/b400/base_books_t1_s1866.csv", "ALEX-OL", "#c0392b", "-", "o"),
           ("r13/stag400/stag_books_t1_s1866.csv", "randomized density", "#2980b9", "-", "s"),
-          ("scale400_books/sali_books_t1_s1866.csv", "SALI", "#27ae60", "--", "^"),
-          ("scale400_books/btreebulk_books_t1_s1866.csv", "B$^+$-tree-OLC", "#7f8c8d", ":", "d")]
+          ("r14/s400/sali_books_t1_s1866.csv", "SALI", "#27ae60", "--", "^"),
+          ("r14/s400/btreebulk_books_t1_s1866.csv", "B$^+$-tree-OLC", "#7f8c8d", ":", "d")]
 
 fig, ax = plt.subplots(figsize=(3.33, 2.6), layout="constrained")
 # Each point is a batch, drawn at its midpoint; a band covers each batch that contains a predicted

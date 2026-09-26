@@ -2,7 +2,7 @@
 """Comparison with XIndex and FINEdex at 400M books keys (paper Figure: fig_cmp; tab_cmp.tex
 holds every cell for the record).
 
-  python3 analysis/waves/mk_cmp.py [outdir]
+  python3 analysis/mk_cmp.py [outdir]
 
 Every cell is the median over three seeds (1866, 5, 72), all runs on the final binary:
   r6/b400   ALEX-OL arms, insert-only, 1 thread (final rerun, bgx6)
@@ -19,7 +19,7 @@ import glob, os, re, statistics as st, sys
 
 R = os.environ.get("WAVE_RESULTS",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "raw"))
-OUT = sys.argv[1] if len(sys.argv) > 1 else "figures/waves"
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 os.makedirs(OUT, exist_ok=True)
 SEEDS = (1866, 5, 72)
 

@@ -44,7 +44,7 @@ exhaustive checks.
 | `raw/r6/eq` | 3 | 12 foreground + 4 background threads, 400M books | equal core budget |
 | `raw/r6/sat` | 6 | 32 foreground threads, 400M books | no spare cores |
 | `raw/r6/ocmp` | 4 (+1 failed) | XIndex and FINEdex on 400M osm | comparison on osm |
-| `raw/r7/cmp` | 6 (+3 failed) | XIndex and FINEdex, 400M books, insert-only, 3 seeds at 16 threads, seeds 5 and 72 at 1 | comparison table |
+| `raw/r7/cmp` | 7 (+3 failed) | XIndex and FINEdex, 400M books, insert-only, 3 seeds at 16 threads, seeds 5 and 72 at 1 | comparison table |
 | `raw/r7/cmpmix` | 9 (+3 failed) | ALEX-OL, design, XIndex, FINEdex at 50/50, 16 threads, 3 seeds | comparison table |
 | `raw/r7/cpu` | 15 | CPU time (`CPU` rows) for baseline and design, 1, 12 and 16 threads | CPU cost of background threads |
 | `raw/r7/recent` | 10 | 50/50 with lookups of just-inserted keys (`recent`) | the buffered read path |
@@ -72,6 +72,10 @@ exhaustive checks.
 | `raw/r13/ns` | 108 | Node-size sweep, 32 to 131,072 entries per node, 4M | node-size sweep |
 | `raw/r13/stag400` | 12 | Released vs randomized density, 400M books, 1 and 16 threads, 3 seeds | randomized density at scale |
 | `raw/r13/dens` | 6 | Node densities right after bulk load (text files) | density check |
+| `raw/r14/s400` | 15 | LIPP-OL, SALI, B+-tree-OLC, ART-OLC at 400M books and SALI at 400M osm, 1 thread, 3 seeds (same server as r6, r7, r12, r13) | RQ2 at scale and the 400M per-batch figure |
+| `raw/r14/b400` | 18 | Design arms at 400M books, 16 threads, 3 seeds (same server as r6) | 16-thread design table and figure |
+| `raw/r14/acct/ins` | 6 | XIndex and FINEdex insert-only, 400M books, 16 threads, 3 seeds (same server as r9, r10, r11) | account table |
+| `raw/r14/acct/mix` | 8 (+4 failed) | ALEX-OL, design, XIndex, FINEdex at 50/50, 16 threads, 3 seeds (same server as r9, r10, r11) | account table |
 | `raw/final_cmp` | 11 | XIndex and FINEdex at 1 thread, seed 1866 (earlier driver; their code is unchanged) | comparison table |
 <!-- /final-rows -->
 

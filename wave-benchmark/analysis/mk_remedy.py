@@ -8,7 +8,7 @@ that has not occurred. See results/README.md.
 import glob, os, statistics as st, sys
 R = os.environ.get("WAVE_RESULTS",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "raw"))
-OUT = sys.argv[1] if len(sys.argv) > 1 else "figures/waves"
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 # Final-driver rows: 23 fields (see results/README.md). Source: r13/sweep, the rerun on the
 # final binary of the original remedy runs (alexol = released density, alexolstag = randomized).
 C = ("tag index seed threads batch keys p50 p99 p999 p9999 max n10 n100 n1ms nops "
@@ -42,7 +42,7 @@ with open(f"{OUT}/tab_remedy.tex", "w") as o:
     for T in (1, 16):
         for key, lab in (("base", "released"), ("stag", "randomized")):
             c = cell(key, T)
-            if c: o.write(f"{T} & {lab} & {c[0]:.0f} & {c[1]:.0f} & {c[2]:.0f} & {c[3]:.1f} \\\\\n")
+            if c: o.write(f"{T} & {lab} & {c[0]:.0f} & {c[1]:.0f} & {c[2]:.0f} & {(f'{c[3]:.2f}' if c[3] < 10 else f'{c[3]:.1f}')} \\\\\n")
         if T == 1: o.write("\\midrule\n")
     o.write("\\bottomrule\n\\end{tabular}\n")
 print(f"wrote {OUT}/tab_remedy.tex")

@@ -1,0 +1,26 @@
+[side] seed 1 rc=0 FULLVERIFY alexol t32 seed1: 0/8000000 missing or wrong
+[side] seed 2 rc=139 
+[side] seed 3 rc=0 FULLVERIFY alexol t32 seed3: 7512/8000000 missing or wrong
+[side] seed 4 rc=0 FULLVERIFY alexol t32 seed4: 0/8000000 missing or wrong
+[side] seed 5 rc=139 
+[side] seed 6 rc=139 
+[side] seed 7 rc=124 
+[side] seed 8 rc=139 
+[bg side bgthreads=4] seed 1 rc=0 FULLVERIFY alexol t32 seed1: 0/8000000 missing or wrong
+[bg side bgthreads=4] seed 2 rc=124 
+[bg side bgthreads=4] seed 3 rc=0 FULLVERIFY alexol t32 seed3: 0/8000000 missing or wrong
+[bg side bgthreads=4] seed 4 rc=0 FULLVERIFY alexol t32 seed4: 0/8000000 missing or wrong
+[bg side bgthreads=4] seed 5 rc=0 FULLVERIFY alexol t32 seed5: 4937874/8000000 missing or wrong
+[bg side bgthreads=4] seed 6 rc=0 FULLVERIFY alexol t32 seed6: 0/8000000 missing or wrong
+[bg side bgthreads=4] seed 7 rc=124 
+[bg side bgthreads=4] seed 8 rc=139 
+[] seed 1 rc=0 FULLVERIFY alexol t32 seed1: 0/8000000 missing or wrong
+[] seed 2 rc=0 FULLVERIFY alexol t32 seed2: 1237235/8000000 missing or wrong
+[] seed 3 rc=0 FULLVERIFY alexol t32 seed3: 0/8000000 missing or wrong
+[] seed 4 rc=0 FULLVERIFY alexol t32 seed4: 0/8000000 missing or wrong
+[] seed 5 rc=124 
+[] seed 6 rc=0 FULLVERIFY alexol t32 seed6: 0/8000000 missing or wrong
+[] seed 7 rc=139 
+[] seed 8 rc=139 
+
+[exited with code 0]

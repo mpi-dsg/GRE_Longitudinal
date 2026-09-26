@@ -2,11 +2,12 @@
 """Where each index pays for inserts: every concurrent index on one 400M workload (paper Table:
 tab_account).
 
-  python3 analysis/waves/mk_account.py [outdir]
+  python3 analysis/mk_account.py [outdir]
 
 400M SOSD books keys, bulk 100M then 300M operations in 24 batches, 16 threads, final driver.
-  insert-only: r9/b400 (ALEX-OL arms), r7/cmp (XIndex, FINEdex), r10/ins + r11/acct/ins (others); 3 seeds
-  50/50:       r7/cmpmix (ALEX-OL arms, XIndex, FINEdex), r10/mix + r11/acct/mix (others); 3 seeds
+All from one server (r9, r10, r11, r14/acct were measured on the same machine).
+  insert-only: r9/b400 (ALEX-OL arms), r14/acct/ins (XIndex, FINEdex), r10/ins + r11/acct/ins (others); 3 seeds
+  50/50:       r14/acct/mix (ALEX-OL arms, XIndex, FINEdex), r10/mix + r11/acct/mix (others); 3 seeds
   90/10:       r10/read90 (seed 1866) and r11/acct/read90 (seeds 5, 72), all indexes
 Cells are medians over the runs present. Memory is peak resident set size from the verify logs
 (about 5 GB of it is the driver's key arrays, common to all). XIndex and FINEdex runs that
@@ -16,10 +17,10 @@ import glob, os, re, statistics as st, sys
 
 R = os.environ.get("WAVE_RESULTS",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "raw"))
-OUT = sys.argv[1] if len(sys.argv) > 1 else "figures/waves"
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 os.makedirs(OUT, exist_ok=True)
 SEEDS = (1866, 5, 72)
-LOGS = ("r7/mq7_verify.log", "r9/mq9_verify.log", "r10/mq10_verify.log", "r11/mq11_verify.log")
+LOGS = ("r9/mq9_verify.log", "r10/mq10_verify.log", "r11/mq11_verify.log", "r14/mq14v6_verify.log")
 
 
 def run(f):
@@ -84,10 +85,10 @@ def outcome(paths):
 def src(arm):
     if arm in ("base", "bgside4"):
         ins = [f"r9/b400/{arm}_books_t16_s{s}.csv" for s in SEEDS]
-        mix = [f"r7/cmpmix/{arm}_books_t16_s{s}.csv" for s in SEEDS]
+        mix = [f"r14/acct/mix/{arm}_books_t16_s{s}.csv" for s in SEEDS]
     elif arm in ("xindex", "finedex"):
-        ins = [f"r7/cmp/{arm}_books_t16_s{s}.csv" for s in SEEDS]
-        mix = [f"r7/cmpmix/{arm}_books_t16_s{s}.csv" for s in SEEDS]
+        ins = [f"r14/acct/ins/{arm}_books_t16_s{s}.csv" for s in SEEDS]
+        mix = [f"r14/acct/mix/{arm}_books_t16_s{s}.csv" for s in SEEDS]
     else:
         ins = [f"r10/ins/{arm}_books_t16_s1866.csv"] + [f"r11/acct/ins/{arm}_books_t16_s{s}.csv" for s in (5, 72)]
         mix = [f"r10/mix/{arm}_books_t16_s1866.csv"] + [f"r11/acct/mix/{arm}_books_t16_s{s}.csv" for s in (5, 72)]

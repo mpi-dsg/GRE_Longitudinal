@@ -12,7 +12,7 @@ plt.rcParams.update({"font.size": 10, "axes.labelsize": 10, "axes.titlesize": 10
 
 R = os.environ.get("WAVE_RESULTS",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "raw"))
-OUT = sys.argv[1] if len(sys.argv) > 1 else "figures/waves"
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 os.makedirs(OUT, exist_ok=True)
 BULK, TOTAL = 100_000_000, 400_000_000
 NF = 23  # fields in an x-row of the current driver
@@ -46,7 +46,7 @@ for ax, T in zip(axes, (1, 16)):
         # A band covers each batch that contains a predicted burst position.
         ax.axvspan(v / 1e6, (v + BS) / 1e6, color="0.88", lw=0, zorder=0)
     for key, lab, col, ls, mk in arms:
-        fs = sorted(glob.glob(f"{R}/{'r9' if T == 16 else 'r6'}/b400/{key}_books_t{T}_s1866.csv"))
+        fs = sorted(glob.glob(f"{R}/{'r14' if T == 16 else 'r6'}/b400/{key}_books_t{T}_s1866.csv"))
         if not fs:
             continue
         x = rows(fs[0])

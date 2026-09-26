@@ -2,15 +2,15 @@
 """Tables and text numbers for the side buffer and background expansion (Section 5 / Q5),
 and the node-size remedy at 400M. Generated from the CSVs; nothing is typed by hand.
 
-  python3 analysis/waves/mk_mech.py [outdir]
+  python3 analysis/mk_mech.py [outdir]
 
-Reads results/raw/r6 (final rerun on the final binary) and {ns400,seeds400,mix400,thr}. Prints every number the text quotes.
+Reads results/raw/r6 (final rerun on the final binary) and {seeds400,mix400,thr}. Prints every number the text quotes.
 """
 import glob, os, statistics as st, sys
 
 R = os.environ.get("WAVE_RESULTS",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "raw"))
-OUT = sys.argv[1] if len(sys.argv) > 1 else "figures/waves"
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 os.makedirs(OUT, exist_ok=True)
 
 X = ("tag index seed threads batch keys p50 p99 p999 p9999 max n10 n100 n1ms nops "
@@ -139,8 +139,8 @@ B4 = {}
 ARM4 = ("base", "ns2048", "side", "bgside", "bgside2", "bgside4")
 for T in (1, 16):
     for a in ARM4:
-        # 16 threads from r9 (rerun on an idle server); r6 measured them on a slower machine state.
-        B4[(a, T)] = cell(f"{'r9' if T == 16 else 'r6'}/b400/{a}_books_t{T}_s*.csv", 24)
+        # 16 threads from r14, rerun on the server that measured r6, so the table has one server.
+        B4[(a, T)] = cell(f"{'r14' if T == 16 else 'r6'}/b400/{a}_books_t{T}_s*.csv", 24)
         c = B4[(a, T)]
         if not c:
             continue

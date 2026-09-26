@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Numbers the paper quotes from the reruns on the final binary (results/raw/r13).
 
-  python3 analysis/waves/mk_r13.py
+  python3 analysis/mk_r13.py
 
 Same definitions as the original scripts: a run's burst ratio is its worst batch p99.9 over its
 median batch p99.9; cells are medians over runs; "predicted" batches are those containing a burst

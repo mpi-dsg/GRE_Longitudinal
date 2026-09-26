@@ -1,0 +1,31 @@
+base 1 rc=0 rootexp=0 32 seed1: 0/8000000 missing or wrong
+base 2 rc=139 rootexp=0 
+base 3 rc=2 rootexp=1 32 seed3: 1/8000000 missing or wrong
+xol
+base 4 rc=0 rootexp=0 32 seed4: 0/8000000 missing or wrong
+base 5 rc=139 rootexp=0 
+base 6 rc=0 rootexp=0 32 seed6: 0/8000000 missing or wrong
+base 7 rc=0 rootexp=1 32 seed7: 0/8000000 missing or wrong
+base 8 rc=0 rootexp=2 32 seed8: 0/8000000 missing or wrong
+side 1 rc=0 rootexp=0 32 seed1: 0/8000000 missing or wrong
+side 2 rc=2 rootexp=1 32 seed2: 1/8000000 missing or wrong
+xol
+side 3 rc=2 rootexp=1 32 seed3: 2/8000000 missing or wrong
+xol
+side 4 rc=0 rootexp=0 32 seed4: 0/8000000 missing or wrong
+side 5 rc=2 rootexp=1 32 seed5: 3/8000000 missing or wrong
+xol
+side 6 rc=0 rootexp=0 32 seed6: 0/8000000 missing or wrong
+side 7 rc=0 rootexp=1 32 seed7: 0/8000000 missing or wrong
+side 8 rc=2 rootexp=2 32 seed8: 2/8000000 missing or wrong
+xol
+bgside4 1 rc=0 rootexp=0 32 seed1: 0/8000000 missing or wrong
+bgside4 2 rc=2 rootexp=1 32 seed2: 1/8000000 missing or wrong
+xol
+bgside4 3 rc=139 rootexp=0 
+bgside4 4 rc=0 rootexp=0 32 seed4: 0/8000000 missing or wrong
+bgside4 5 rc=139 rootexp=0 
+bgside4 6 rc=0 rootexp=0 32 seed6: 0/8000000 missing or wrong
+bgside4 7 rc=0 rootexp=1 32 seed7: 0/8000000 missing or wrong
+bgside4 8 rc=2 rootexp=2 32 seed8: 1/8000000 missing or wrong
+xol

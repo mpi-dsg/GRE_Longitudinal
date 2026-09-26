@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Summaries of the experiments the 2026-09-24 review panel asked for (results/raw/r7, r8).
 
-  python3 analysis/waves/mk_panel.py
+  python3 analysis/mk_panel.py
 
 cpu     CPU time over the timed interval (background threads included) at equal and
         unequal core budgets, 400M books.

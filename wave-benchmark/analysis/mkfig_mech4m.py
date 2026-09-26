@@ -15,7 +15,7 @@ plt.rcParams.update({"font.size": 10, "axes.labelsize": 10, "xtick.labelsize": 1
 
 R = os.environ.get("WAVE_RESULTS",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "raw"))
-OUT = sys.argv[1] if len(sys.argv) > 1 else "figures/waves"
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 os.makedirs(OUT, exist_ok=True)
 THREADS = [1, 2, 4, 8, 16]
 
